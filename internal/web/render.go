@@ -28,27 +28,72 @@ var mdLinkParts = regexp.MustCompile(`^!?\[([^\]]*)\]\(([^)]+)\)$`)
 // Markdown links to URLs become anchors; Markdown links to media are dropped
 // (shown as file attachments); bare URLs are linkified. All other text is
 // HTML-escaped, so message content (which is untrusted) can never inject markup.
+//
+// Runs of Markdown blockquote lines (signal-export renders a quoted reply as
+// `> …` lines) are wrapped in a styled <blockquote> instead of leaking the raw
+// `>` markers into the transcript. Each quoted line still goes through the same
+// escape/linkify pipeline, so quoted content is just as safe as normal text.
 func renderBody(body string) template.HTML {
 	if body == "" {
 		return ""
 	}
+	lines := strings.Split(body, "\n")
+	var b strings.Builder
+	for i := 0; i < len(lines); {
+		if isQuoteLine(lines[i]) {
+			var inner []string
+			for i < len(lines) && isQuoteLine(lines[i]) {
+				inner = append(inner, stripQuotePrefix(lines[i]))
+				i++
+			}
+			b.WriteString(`<blockquote class="msg-quote">`)
+			b.WriteString(renderInline(strings.Join(inner, "\n")))
+			b.WriteString(`</blockquote>`)
+			continue
+		}
+		var normal []string
+		for i < len(lines) && !isQuoteLine(lines[i]) {
+			normal = append(normal, lines[i])
+			i++
+		}
+		b.WriteString(renderInline(strings.Join(normal, "\n")))
+	}
+	return template.HTML(b.String())
+}
+
+// isQuoteLine reports whether a line is a Markdown blockquote line.
+func isQuoteLine(line string) bool { return strings.HasPrefix(line, ">") }
+
+// stripQuotePrefix removes the leading ">" and one optional following space.
+func stripQuotePrefix(line string) string {
+	line = line[1:] // drop '>'
+	if strings.HasPrefix(line, " ") {
+		line = line[1:]
+	}
+	return line
+}
+
+// renderInline escapes and linkifies a run of body text (no blockquote handling)
+// and returns the safe HTML. Newlines become <br>. This is the inline pipeline
+// shared by normal text and the inside of a quoted block.
+func renderInline(text string) string {
 	var b strings.Builder
 	last := 0
-	for _, loc := range bodyTokenRe.FindAllStringSubmatchIndex(body, -1) {
+	for _, loc := range bodyTokenRe.FindAllStringSubmatchIndex(text, -1) {
 		// Escape the plain text preceding this token.
 		if loc[0] > last {
-			b.WriteString(escapeText(body[last:loc[0]]))
+			b.WriteString(escapeText(text[last:loc[0]]))
 		}
 		last = loc[1]
-		token := body[loc[0]:loc[1]]
+		token := text[loc[0]:loc[1]]
 		switch {
 		case loc[2] >= 0: // image: drop
 			// no-op
 		case loc[4] >= 0: // markdown link
 			if parts := mdLinkParts.FindStringSubmatch(token); parts != nil {
-				text, target := parts[1], strings.TrimSpace(parts[2])
+				txt, target := parts[1], strings.TrimSpace(parts[2])
 				if isURL(target) {
-					b.WriteString(anchor(target, text))
+					b.WriteString(anchor(target, txt))
 				}
 				// else: media file link — drop (rendered as attachment)
 			}
@@ -61,10 +106,10 @@ func renderBody(body string) template.HTML {
 			}
 		}
 	}
-	if last < len(body) {
-		b.WriteString(escapeText(body[last:]))
+	if last < len(text) {
+		b.WriteString(escapeText(text[last:]))
 	}
-	return template.HTML(b.String())
+	return b.String()
 }
 
 // trailingURLPunct mirrors the parser's bare-URL trimming.

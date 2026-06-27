@@ -50,6 +50,33 @@ func TestRenderBody(t *testing.T) {
 			in:       "https://example.com",
 			contains: []string{`rel="noopener noreferrer nofollow"`, `target="_blank"`},
 		},
+		{
+			name: "quoted reply renders as blockquote not raw markers",
+			in:   "> Apparently these are real?\n>\n> (- Joe -)\n\nlol",
+			contains: []string{
+				`<blockquote class="msg-quote">`,
+				"Apparently these are real?",
+				"(- Joe -)",
+				"</blockquote>",
+				"lol",
+			},
+			excludes: []string{"&gt; Apparently", "> Apparently"},
+		},
+		{
+			name: "links inside a quote are still linkified and escaped",
+			in:   "> see https://example.com/x and <b>",
+			contains: []string{
+				`<blockquote class="msg-quote">`,
+				`href="https://example.com/x"`,
+				"&lt;b&gt;",
+			},
+			excludes: []string{"<b> "},
+		},
+		{
+			name:     "leading > quotes only the quoted run, not following text",
+			in:       "> quoted\nreply text",
+			contains: []string{`<blockquote class="msg-quote">quoted</blockquote>`, "reply text"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -34,6 +34,16 @@
 }
 .lightbox img { max-width: 92vw; max-height: 80vh; border-radius: 0.5rem; }
 
+/* Quoted reply blocks (signal-export `> …` lines) rendered by renderBody. Uses
+   currentColor so it reads correctly inside any chat bubble in either theme. */
+.msg-quote {
+  border-left: 3px solid color-mix(in oklab, currentColor 35%, transparent);
+  margin: 0.25rem 0;
+  padding: 0.1rem 0 0.1rem 0.6rem;
+  opacity: 0.75;
+  font-size: 0.95em;
+}
+
 /* Flash the jump-to-context target message briefly. */
 @keyframes target-flash {
   0%   { background-color: color-mix(in oklab, var(--color-primary) 30%, transparent); }
