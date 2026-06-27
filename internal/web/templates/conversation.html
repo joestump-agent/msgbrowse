@@ -1,7 +1,14 @@
 {{define "conversation"}}{{template "page_start" .}}
   <header class="sticky top-16 z-20 bg-base-100/90 backdrop-blur border-b border-base-300 px-4 lg:px-6 py-3">
     <h1 class="text-xl font-semibold">{{humanName .Active.Name}}</h1>
-    <div class="text-sm opacity-60 flex flex-wrap items-center gap-x-2">
+    {{- if .Active.Identifiers}}
+    <div class="flex flex-wrap items-center gap-1.5 mt-1">
+      {{- range .Active.Identifiers}}
+      <span class="badge badge-sm badge-ghost gap-1" title="{{humanSource .Source}}">{{template "icon-identity" $}} {{.Identifier}}</span>
+      {{- end}}
+    </div>
+    {{- end}}
+    <div class="text-sm opacity-60 flex flex-wrap items-center gap-x-2 mt-1">
       <span>{{.Active.MessageCount}} messages</span>
       {{- if .Active.FirstTS}}<span>· {{.Active.FirstTS}} → {{.Active.LastTS}}</span>{{end}}
       {{- if gt .Active.ImageCount 0}}<span>· {{template "icon-photo" .}} {{.Active.ImageCount}}</span>{{end}}

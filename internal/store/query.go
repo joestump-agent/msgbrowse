@@ -23,6 +23,11 @@ type ConversationSummary struct {
 	ImageCount   int
 	FileCount    int
 	LinkCount    int
+	// Identifiers are the contact's cross-source handles (e.g. an iMessage
+	// phone/email merged onto a Signal contact), excluding the conversation's
+	// own source-side identity. Populated for the single-conversation view
+	// (GetConversationByID); nil in the sidebar list.
+	Identifiers []ContactIdentifier
 }
 
 // MessageView is a single message rendered for the transcript, with its
@@ -178,6 +183,14 @@ func (s *Store) GetConversationByID(ctx context.Context, id int64) (*Conversatio
 			return nil, err
 		}
 	}
+	// Cross-source handles travel with the single-conversation view so every
+	// render path (transcript, jump-to-context) gets the identifier badges
+	// without each handler remembering a separate fetch.
+	idents, err := s.ConversationIdentifiers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	cs.Identifiers = idents
 	return &cs, nil
 }
 
@@ -425,6 +438,44 @@ func (s *Store) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
 		}
 		sn.TakenAt = parseLayout(takenAt)
 		out = append(out, sn)
+	}
+	return out, rows.Err()
+}
+
+// ContactIdentifier is one source-side handle for a contact (e.g. a phone
+// number or email from iMessage, or a Signal display name).
+type ContactIdentifier struct {
+	Source     string
+	Identifier string
+}
+
+// ConversationIdentifiers returns the identifiers of the contact linked to the
+// given conversation, ordered by source then identifier. Returns nil when the
+// conversation has no linked contact (e.g. a group). Only the conversation's
+// own source-side identity — the (source, name) row created at ingest — is
+// excluded, so a Signal conversation doesn't echo its own display name back.
+// The exclusion is keyed on both source and value (not value alone) so a
+// genuine cross-source handle that happens to share the conversation's name
+// (e.g. a phone-named Signal contact merged with the same iMessage number) is
+// still surfaced rather than collaterally hidden.
+func (s *Store) ConversationIdentifiers(ctx context.Context, convID int64) ([]ContactIdentifier, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT ci.source, ci.identifier
+  FROM conversations c
+  JOIN contact_identifiers ci ON ci.contact_id = c.contact_id
+ WHERE c.id = ? AND NOT (ci.source = c.source AND ci.identifier = c.name)
+ ORDER BY ci.source, ci.identifier`, convID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation identifiers: %w", err)
+	}
+	defer rows.Close()
+	var out []ContactIdentifier
+	for rows.Next() {
+		var ci ContactIdentifier
+		if err := rows.Scan(&ci.Source, &ci.Identifier); err != nil {
+			return nil, err
+		}
+		out = append(out, ci)
 	}
 	return out, rows.Err()
 }

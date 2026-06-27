@@ -32,3 +32,17 @@ func IsKnown(s string) bool {
 	}
 	return false
 }
+
+// Label returns the human-facing display name for a source string (e.g.
+// "iMessage" for the stored "imessage"). Unknown values are returned unchanged
+// so callers never render an empty label.
+func Label(s string) string {
+	switch s {
+	case Signal:
+		return "Signal"
+	case IMessage:
+		return "iMessage"
+	default:
+		return s
+	}
+}

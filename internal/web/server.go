@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/joestump/msgbrowse/internal/config"
+	"github.com/joestump/msgbrowse/internal/source"
 	"github.com/joestump/msgbrowse/internal/store"
 )
 
@@ -53,6 +54,7 @@ func NewServer(st *store.Store, cfg *config.Config, log *slog.Logger) (*Server, 
 		"humanName":        humanName,
 		"initials":         initials,
 		"avatarColor":      avatarColor,
+		"humanSource":      source.Label,
 	}).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
