@@ -1,0 +1,30 @@
+# Binaries
+/sigbrowse
+/bin/
+/dist/
+
+# Local app data (SQLite DB, vector index, caches) — never commit
+/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Config with secrets — only the *.example.yaml files are tracked
+/config.yaml
+/litellm.local.yaml
+.env
+
+# Go
+*.test
+*.out
+/vendor/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Test/build scratch
+/tmp/
+/coverage.out
