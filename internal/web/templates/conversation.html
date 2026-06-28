@@ -1,19 +1,31 @@
 {{define "conversation"}}{{template "page_start" .}}
-  <header class="sticky top-16 z-20 bg-base-100/90 backdrop-blur border-b border-base-300 px-4 lg:px-6 py-3">
-    <h1 class="text-xl font-semibold">{{humanName .Active.Name}}</h1>
-    {{- if .Active.Identifiers}}
-    <div class="flex flex-wrap items-center gap-1.5 mt-1">
-      {{- range .Active.Identifiers}}
-      <span class="badge badge-sm badge-ghost gap-1" title="{{humanSource .Source}}">{{template "icon-identity" $}} {{.Identifier}}</span>
-      {{- end}}
+  {{/* Conversation header (REQ-0006-006): avatar + name (22–26/700), inline
+       phone/email identifier chips, then a meta line — N messages · date range —
+       with image/link/attachment icon+count chips. The AI-facts panel below is
+       unchanged. */}}
+  <header class="conv-header sticky top-[54px] z-20 bg-base-100/90 backdrop-blur border-b border-neutral px-4 lg:px-6 py-3">
+    <div class="conv-header-top">
+      <span class="avatar-mono {{avatarColor .Active.Name}}">
+        {{initials .Active.Name}}
+        <span class="presence-dot {{sourceSlug .Active.Source}}" title="{{humanSource .Active.Source}}"></span>
+      </span>
+      <div class="min-w-0">
+        <h1 class="conv-title">{{humanName .Active.Name}}</h1>
+        {{- if .Active.Identifiers}}
+        <div class="conv-ids">
+          {{- range .Active.Identifiers}}
+          <span class="id-chip font-mono" title="{{humanSource .Source}}">{{template "icon-identity" $}}<span>{{.Identifier}}</span></span>
+          {{- end}}
+        </div>
+        {{- end}}
+      </div>
     </div>
-    {{- end}}
-    <div class="text-sm opacity-60 flex flex-wrap items-center gap-x-2 mt-1">
-      <span>{{.Active.MessageCount}} messages</span>
-      {{- if .Active.FirstTS}}<span>· {{.Active.FirstTS}} → {{.Active.LastTS}}</span>{{end}}
-      {{- if gt .Active.ImageCount 0}}<span>· {{template "icon-photo" .}} {{.Active.ImageCount}}</span>{{end}}
-      {{- if gt .Active.FileCount 0}}<span>· {{template "icon-paperclip" .}} {{.Active.FileCount}}</span>{{end}}
-      {{- if gt .Active.LinkCount 0}}<span>· {{template "icon-link" .}} {{.Active.LinkCount}}</span>{{end}}
+    <div class="conv-meta">
+      <span><span class="font-mono">{{.Active.MessageCount}}</span> messages</span>
+      {{- if .Active.FirstTS}}<span class="conv-meta-sep">·</span><span class="font-mono">{{dateLabel .Active.FirstTS}} – {{dateLabel .Active.LastTS}}</span>{{end}}
+      {{- if gt .Active.ImageCount 0}}<span class="meta-chip" title="Images">{{template "icon-photo" .}}<span class="font-mono">{{.Active.ImageCount}}</span></span>{{end}}
+      {{- if gt .Active.LinkCount 0}}<span class="meta-chip" title="Links">{{template "icon-link" .}}<span class="font-mono">{{.Active.LinkCount}}</span></span>{{end}}
+      {{- if gt .Active.FileCount 0}}<span class="meta-chip" title="Attachments">{{template "icon-paperclip" .}}<span class="font-mono">{{.Active.FileCount}}</span></span>{{end}}
     </div>
   </header>
   {{- if .Active.Facts}}
@@ -46,6 +58,8 @@
   </section>
   {{- end}}
   <section class="px-4 lg:px-6 py-4">
-    {{template "message_list" .List}}
+    <div class="transcript">
+      {{template "message_list" .List}}
+    </div>
   </section>
 {{template "page_end" .}}{{end}}

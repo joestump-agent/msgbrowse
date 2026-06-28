@@ -88,41 +88,67 @@
 </body>
 </html>{{end}}
 
+{{/* Dense-log transcript (REQ-0006-005, ADR-0012). Each message is a row of
+     [timestamp gutter | sender-colored rail | content column]; "Me" rows carry a
+     faint accent wash + accent edge. Day separators are emitted when the
+     calendar date changes between consecutive rows; the sender name is suppressed
+     when the same sender posts again within the same day block (grouping); system
+     events are centered italic/mono with no rail/gutter. Anchors (id="m{ID}") and
+     the .target jump-to-context flash are preserved. */}}
 {{define "message_list"}}
+{{- $prevDate := "" }}
+{{- $prevSender := "" }}
 {{- range .Messages}}
   {{- $body := renderBody .Body}}
+  {{- $date := dateKey .TS}}
+  {{- $newDay := ne $date $prevDate}}
   {{- if .IsSystem}}
-  <div class="text-center text-xs italic opacity-60 my-2" id="m{{.ID}}">{{if $body}}{{$body}}{{else}}—{{end}}</div>
+    {{- if $newDay}}
+  <div class="day-sep" role="separator"><span>{{dateLabel .TS}}</span></div>
+    {{- end}}
+  <div class="sys-event{{if and $.HighlightID (eq .ID $.HighlightID)}} target{{end}}" id="m{{.ID}}">{{if $body}}{{$body}}{{else}}—{{end}}</div>
+    {{- $prevDate = $date}}
+    {{- $prevSender = ""}}
   {{- else}}
-  <div class="chat {{if .IsOwner}}chat-end{{else}}chat-start{{end}}{{if and $.HighlightID (eq .ID $.HighlightID)}} target{{end}}" id="m{{.ID}}">
-    <div class="chat-header text-xs opacity-70 mb-0.5">
-      <span class="font-medium">{{.Sender}}</span>
-      <time class="ml-1 tabular-nums">{{.TS}}</time>
-    </div>
-    <div class="chat-bubble {{if .IsOwner}}chat-bubble-primary{{end}} max-w-prose">
-      {{- if $body}}<div class="whitespace-pre-wrap break-words">{{$body}}</div>{{end}}
+    {{- if $newDay}}
+  <div class="day-sep" role="separator"><span>{{dateLabel .TS}}</span></div>
+    {{- end}}
+    {{- /* Group consecutive same-sender rows: show the name only on the first row
+           of a run, or whenever a new day was just opened. */}}
+    {{- $showSender := or $newDay (ne .Sender $prevSender)}}
+  <div class="msg-row{{if .IsOwner}} msg-row-me{{end}}{{if not $showSender}} msg-row-grouped{{end}}{{if and $.HighlightID (eq .ID $.HighlightID)}} target{{end}}" id="m{{.ID}}">
+    <time class="msg-time font-mono" datetime="{{.TS}}" title="{{.TS}}">{{clockTime .TS}}</time>
+    <span class="msg-rail {{if .IsOwner}}rail-me{{else}}{{avatarColor .Sender}}{{end}}" aria-hidden="true"></span>
+    <div class="msg-body">
+      {{- if $showSender}}
+      <div class="msg-sender{{if .IsOwner}} msg-sender-me{{end}}">{{if .IsOwner}}Me{{else}}{{humanName .Sender}}{{end}}</div>
+      {{- end}}
+      {{- if $body}}<div class="msg-text whitespace-pre-wrap break-words">{{$body}}</div>{{end}}
       {{- if .Attachments}}
-      <div class="flex flex-wrap gap-2 mt-2">
+      <div class="msg-attachments">
         {{- range .Attachments}}
           {{- if and (eq .Kind "image") (imgRenderable $.Source $.ConvName .RelPath)}}
-          <a href="{{mediaURL $.ActiveID .RelPath}}" target="_blank" rel="noopener noreferrer nofollow">
-            <img class="thumb rounded-lg" loading="lazy" src="{{mediaURL $.ActiveID .RelPath}}" alt="{{.OriginalName}}">
+          <a class="msg-thumb" href="{{mediaURL $.ActiveID .RelPath}}" target="_blank" rel="noopener noreferrer nofollow">
+            <img class="thumb" loading="lazy" src="{{mediaURL $.ActiveID .RelPath}}" alt="{{.OriginalName}}">
           </a>
           {{- else}}
           {{/* Files, and images with no browser-renderable rendition (e.g. an
-               un-transcoded HEIC), render as a labeled download chip. */}}
-          <a class="btn btn-sm btn-outline gap-1" href="{{mediaURL $.ActiveID .RelPath}}">{{if eq .Kind "image"}}{{template "icon-photo" $}}{{else}}{{template "icon-document" $}}{{end}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
+               un-transcoded HEIC), render as a labeled attachment chip:
+               paperclip/photo icon + mono filename. */}}
+          <a class="attach-chip" href="{{mediaURL $.ActiveID .RelPath}}">{{if eq .Kind "image"}}{{template "icon-photo" $}}{{else}}{{template "icon-paperclip" $}}{{end}}<span class="font-mono">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span></a>
           {{- end}}
         {{- end}}
       </div>
       {{- end}}
       {{- if .Links}}
-      <div class="flex flex-wrap gap-2 mt-2">
-        {{- range .Links}}<a class="badge badge-outline gap-1" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{template "icon-link" $}} {{.Domain}}</a>{{end}}
+      <div class="msg-links">
+        {{- range .Links}}<a class="link-pill" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{template "icon-link" $}}<span>{{.Domain}}</span></a>{{end}}
       </div>
       {{- end}}
     </div>
   </div>
+    {{- $prevDate = $date}}
+    {{- $prevSender = .Sender}}
   {{- end}}
 {{- end}}
 {{- if .HasMore}}

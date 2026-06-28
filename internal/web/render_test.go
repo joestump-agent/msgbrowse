@@ -219,6 +219,46 @@ func TestInitials(t *testing.T) {
 	}
 }
 
+func TestDateKey(t *testing.T) {
+	cases := map[string]string{
+		"2022-03-01 09:00:00": "2022-03-01",
+		"2026-12-31 23:59:59": "2026-12-31",
+		"garbage":             "garbage", // unrecognized format → whole string
+	}
+	for in, want := range cases {
+		if got := dateKey(in); got != want {
+			t.Errorf("dateKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestClockTime(t *testing.T) {
+	cases := map[string]string{
+		"2022-03-01 09:00:00": "09:00:00",
+		"2026-12-31 23:59:59": "23:59:59",
+		"odd":                 "odd", // unrecognized → fall back to whole string
+	}
+	for in, want := range cases {
+		if got := clockTime(in); got != want {
+			t.Errorf("clockTime(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDateLabel(t *testing.T) {
+	cases := map[string]string{
+		"2022-03-01 09:00:00": "March 1, 2022",
+		"2022-10-22 20:17:13": "October 22, 2022",
+		"2026-12-09 00:00:00": "December 9, 2026",
+		"not-a-date":          "not-a-date", // unparseable → echoed back
+	}
+	for in, want := range cases {
+		if got := dateLabel(in); got != want {
+			t.Errorf("dateLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestAvatarColorStableAndInPalette(t *testing.T) {
 	a := avatarColor("JonStump")
 	if a != avatarColor("JonStump") {

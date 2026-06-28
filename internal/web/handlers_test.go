@@ -95,9 +95,59 @@ func TestConversationTranscript(t *testing.T) {
 	if !contains(body, "Harper") || !contains(body, "packing now") {
 		t.Errorf("transcript missing expected content")
 	}
+
+	// Dense-log structure (REQ-0006-005): the chat-bubble vocabulary is gone,
+	// replaced by message rows with a mono timestamp gutter, a sender-colored
+	// rail, the sender name, and the body.
+	if contains(body, "chat-bubble") {
+		t.Errorf("chat-bubble markup must not remain in the dense-log transcript")
+	}
+	for _, want := range []string{
+		`class="msg-row`,    // a dense-log message row
+		`class="msg-time`,   // the left timestamp gutter
+		`09:00:00`,          // gutter shows HH:MM:SS, not the full timestamp
+		`class="msg-rail`,   // the sender-colored rail
+		`class="msg-sender`, // the sender name above the body
+		`class="msg-text`,   // the message body
+	} {
+		if !contains(body, want) {
+			t.Errorf("transcript missing dense-log marker %q", want)
+		}
+	}
+
+	// "Me" rows carry the accent wash class + light-accent sender name.
+	if !contains(body, "msg-row-me") {
+		t.Errorf("transcript missing the \"Me\" accent-wash row class")
+	}
+	if !contains(body, "msg-sender-me") || !contains(body, ">Me<") {
+		t.Errorf("transcript does not render the owner's name as \"Me\"")
+	}
+
+	// Day separator: the fixture is all one calendar day, so one labeled
+	// separator should appear.
+	if !contains(body, `class="day-sep"`) || !contains(body, "March 1, 2022") {
+		t.Errorf("transcript missing the day separator label")
+	}
+
+	// System event (the No-Sender row) renders as a centered sys-event line, not
+	// a normal message row.
+	if !contains(body, `class="sys-event`) {
+		t.Errorf("transcript missing the system-event line")
+	}
+
+	// Consecutive same-sender grouping: Harper posts two messages in a row
+	// (rows 3 & 4), so the second is grouped (its sender name is suppressed).
+	if !contains(body, "msg-row-grouped") {
+		t.Errorf("transcript missing consecutive-sender grouping")
+	}
+
 	// The image attachment should render as a thumbnail pointing at the media route.
 	if !contains(body, "/media/"+itoa(conv.ID)+"/media/cabin.jpg") {
 		t.Errorf("transcript missing media thumbnail URL")
+	}
+	// The PDF attachment renders as a labeled attachment chip.
+	if !contains(body, "attach-chip") || !contains(body, "lease.pdf") {
+		t.Errorf("transcript missing the attachment chip")
 	}
 	// Untrusted markdown image syntax must not leak into the HTML.
 	if contains(body, "![cabin]") {

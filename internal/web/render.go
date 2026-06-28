@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/joestump/msgbrowse/internal/signal"
@@ -161,6 +162,51 @@ func humanSize(n int64) string {
 
 // domainOf is a thin wrapper so templates can group links by domain.
 func domainOf(rawurl string) string { return signal.Domain(rawurl) }
+
+// monthNames indexes 1..12 to the full English month name for day-separator
+// labels in the dense-log transcript.
+var monthNames = [...]string{
+	"", "January", "February", "March", "April", "May", "June",
+	"July", "August", "September", "October", "November", "December",
+}
+
+// dateKey returns the calendar-date prefix ("YYYY-MM-DD") of a stored timestamp
+// ("YYYY-MM-DD HH:MM:SS"). The transcript compares consecutive rows' dateKey to
+// decide when to emit a day separator. An unrecognized timestamp returns the
+// whole string so two equal odd values still group together.
+func dateKey(ts string) string {
+	if len(ts) >= 10 && ts[4] == '-' && ts[7] == '-' {
+		return ts[:10]
+	}
+	return ts
+}
+
+// clockTime returns the "HH:MM:SS" portion of a stored timestamp for the
+// transcript's left gutter. Falls back to the whole string if the format is
+// unexpected, so the gutter is never blank.
+func clockTime(ts string) string {
+	if len(ts) >= 19 && ts[10] == ' ' {
+		return ts[11:19]
+	}
+	return ts
+}
+
+// dateLabel renders a stored timestamp's calendar date as a human day-separator
+// label ("2022-10-22 20:17:13" → "October 22, 2022"). Falls back to the raw
+// date prefix if parsing fails.
+func dateLabel(ts string) string {
+	key := dateKey(ts)
+	if len(key) != 10 || key[4] != '-' || key[7] != '-' {
+		return key
+	}
+	year := key[:4]
+	mo, errM := strconv.Atoi(key[5:7])
+	day, errD := strconv.Atoi(key[8:10])
+	if errM != nil || errD != nil || mo < 1 || mo > 12 {
+		return key
+	}
+	return fmt.Sprintf("%s %d, %s", monthNames[mo], day, year)
+}
 
 // camelBoundary matches a lowercase/digit immediately followed by an uppercase
 // letter — a word boundary in a CamelCase contact name.

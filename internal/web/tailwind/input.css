@@ -173,12 +173,14 @@ html {
   font-size: 0.95em;
 }
 
-/* Flash the jump-to-context target message briefly. */
+/* Flash the jump-to-context target message briefly. Re-pointed from the old
+   chat-bubble transcript onto the dense-log row / system-event line. */
 @keyframes target-flash {
   0%   { background-color: color-mix(in oklab, var(--color-primary) 30%, transparent); }
   100% { background-color: transparent; }
 }
-.target .chat-bubble { animation: target-flash 2.5s ease-out 1; }
+.target.msg-row,
+.target.sys-event { animation: target-flash 2.5s ease-out 1; }
 
 /* ===========================================================================
  * App shell — navbar + sidebar + conversation rows (SPEC-0006 REQ-0006-002/003)
@@ -373,4 +375,248 @@ html {
 .source-pill.src-unknown {
   color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
   border-color: var(--color-neutral);
+}
+
+/* ===========================================================================
+ * Conversation header (REQ-0006-006) + dense-log transcript (REQ-0006-005,
+ * ADR-0012). Driven by the slate theme variables so slate-light restyles too.
+ * The chat-bubble transcript is gone; this is the dense log: a left mono
+ * timestamp gutter, a 3px sender-colored rail (accent for "Me"), and a 640px
+ * content column with grouped sender names, day separators, and centered
+ * system events. CSP-safe (no inline styles); the rail color is the avatar
+ * palette utility (bg-*-500), already @source-inline safelisted above.
+ * ========================================================================= */
+
+/* --- Conversation header ------------------------------------------------- */
+.conv-header-top {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.conv-header .avatar-mono {
+  width: 44px;
+  height: 44px;
+  font-size: 15px;
+}
+/* Presence dot on the larger header avatar sits on the base-100 surface. */
+.conv-header .presence-dot {
+  border-color: var(--color-base-100);
+}
+.conv-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--color-base-content);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (min-width: 1024px) {
+  .conv-title { font-size: 25px; }
+}
+/* Inline phone/email identifier chips. */
+.conv-ids {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.25rem;
+}
+.id-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1px 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-neutral);
+  font-size: 11.5px;
+  color: color-mix(in oklab, var(--color-base-content) 62%, transparent);
+  background: transparent;
+}
+/* Meta line: N messages · date range, plus media count chips. */
+.conv-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+  font-size: 12.5px;
+  color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+}
+.conv-meta-sep {
+  opacity: 0.6;
+}
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+.meta-chip:first-of-type {
+  margin-left: 0.25rem;
+}
+
+/* --- Transcript reading column ------------------------------------------- */
+.transcript {
+  max-width: calc(76px + 3px + 640px + 1.5rem);
+}
+
+/* --- Day separator ------------------------------------------------------- */
+.day-sep {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0 0.75rem;
+}
+.day-sep::before,
+.day-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in oklab, var(--color-neutral) 70%, transparent);
+}
+.day-sep span {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--color-base-content) 42%, transparent);
+}
+
+/* --- System events (centered italic/mono dim, no rail/gutter) ------------ */
+.sys-event {
+  text-align: center;
+  margin: 0.5rem 0;
+  padding: 0.15rem 0;
+  font-family: var(--font-mono);
+  font-style: italic;
+  font-size: 12px;
+  color: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+}
+
+/* --- Message row --------------------------------------------------------- */
+.msg-row {
+  display: grid;
+  grid-template-columns: 76px 3px minmax(0, 640px);
+  column-gap: 0.75rem;
+  align-items: start;
+  padding: 0.2rem 0.5rem 0.2rem 0;
+  border-left: 2px solid transparent; /* reserve the accent edge for "Me" rows */
+  border-radius: 0 6px 6px 0;
+}
+/* Grouped rows (same sender, same day) sit tighter under their predecessor. */
+.msg-row-grouped {
+  padding-top: 0.05rem;
+}
+/* Left timestamp gutter: mono HH:MM:SS, dim, right-aligned against the rail. */
+.msg-time {
+  grid-column: 1;
+  justify-self: end;
+  padding-top: 0.12rem;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--color-base-content) 32%, transparent);
+}
+/* 3px sender-colored rail. The fill comes from the avatar palette utility
+   (bg-*-500) for the other party; "Me" uses the accent via .rail-me. */
+.msg-rail {
+  grid-column: 2;
+  align-self: stretch;
+  width: 3px;
+  min-height: 1.1rem;
+  border-radius: 2px;
+}
+.msg-rail.rail-me {
+  background: var(--color-primary);
+}
+/* Content column (max-width 640px via the grid track). */
+.msg-body {
+  grid-column: 3;
+  min-width: 0;
+}
+.msg-sender {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
+}
+/* "Me" name in the light accent. */
+.msg-sender-me {
+  color: var(--color-secondary);
+}
+[data-theme="slate-light"] .msg-sender-me {
+  color: var(--color-primary);
+}
+.msg-text {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-base-content);
+}
+/* "Me" rows: faint accent wash + accent left edge. */
+.msg-row-me {
+  background: rgba(111, 147, 214, 0.05);
+  border-left-color: var(--color-primary);
+}
+[data-theme="slate-light"] .msg-row-me {
+  background: color-mix(in oklab, var(--color-primary) 7%, transparent);
+}
+
+/* --- Attachments / links inside a row ------------------------------------ */
+.msg-attachments,
+.msg-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+.msg-thumb {
+  display: inline-flex;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.msg-thumb .thumb {
+  border-radius: 0.5rem;
+}
+/* Attachment chip: paperclip/photo icon + mono filename. */
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-neutral);
+  background: color-mix(in oklab, var(--color-base-content) 3%, transparent);
+  font-size: 12px;
+  color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.attach-chip:hover {
+  color: var(--color-base-content);
+  border-color: color-mix(in oklab, var(--color-primary) 45%, var(--color-neutral));
+}
+.attach-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Link-preview pill in the accent. */
+.link-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 35%, transparent);
+  font-size: 12px;
+  color: var(--color-primary);
+  background: color-mix(in oklab, var(--color-primary) 6%, transparent);
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+.link-pill:hover {
+  background: color-mix(in oklab, var(--color-primary) 12%, transparent);
+  border-color: color-mix(in oklab, var(--color-primary) 55%, transparent);
 }
