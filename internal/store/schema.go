@@ -1,10 +1,24 @@
 package store
 
+import "context"
+
 // schemaVersion is the current schema revision, recorded in SQLite's
 // `user_version` pragma. On Open, the migrations runner brings any older
 // database forward to this version. Bump it and append a migration whenever the
 // schema changes.
 const schemaVersion = 5
+
+// SchemaVersion returns the schema revision this binary expects (and migrates a
+// database forward to on Open). Read-only callers — notably `msgbrowse doctor` —
+// compare it against a database's PRAGMA user_version to report drift.
+func SchemaVersion() int { return schemaVersion }
+
+// UserVersion returns the database's recorded schema version (PRAGMA
+// user_version). After a successful Open this equals SchemaVersion(); doctor
+// reads it directly so it can report the value without re-deriving it.
+func (s *Store) UserVersion(ctx context.Context) (int, error) {
+	return readUserVersion(ctx, s.db)
+}
 
 // migrations is the ordered list of per-version migrations applied on Open.
 // Each entry's index is its version (1-based; index 0 is unused).

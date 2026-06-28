@@ -59,6 +59,7 @@ func NewRootCommand() *cobra.Command {
 		newSignalImportCommand(),
 		newIngestAliasCommand(),
 		newIMessageImportCommand(),
+		newDoctorCommand(),
 		newEmbedCommand(),
 		newFactsCommand(),
 		newMediaCommand(),
@@ -88,6 +89,12 @@ func Execute() error {
 // renderError prints a command failure as a styled error, appending an
 // actionable hint for the failure modes users actually hit.
 func renderError(err error) {
+	// `doctor` already printed a full human-readable report to stdout; its
+	// sentinel only exists to make the process exit non-zero. Don't double-report
+	// it as a logger error line.
+	if errors.Is(err, errDoctorFailed) {
+		return
+	}
 	if hint := errorHint(err); hint != "" {
 		slog.Error(err.Error(), "hint", hint)
 		return

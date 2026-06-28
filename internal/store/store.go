@@ -61,6 +61,24 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// OpenReadOnly opens an EXISTING database read-only and does NOT run migrations.
+// It's for inspection (e.g. `msgbrowse doctor`): unlike Open it neither creates
+// the file nor writes anything (mode=ro), so it can report the on-disk schema
+// version and counts truthfully without masking drift by migrating. The file
+// must already exist; queries that assume a newer schema are the caller's to
+// guard.
+func OpenReadOnly(path string) (*Store, error) {
+	q := url.Values{}
+	q.Set("mode", "ro")
+	q.Add("_pragma", "busy_timeout(2000)")
+	dsn := "file:" + path + "?" + q.Encode()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite read-only: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
 // DB exposes the underlying handle for read queries added in later slices.
 func (s *Store) DB() *sql.DB { return s.db }
 

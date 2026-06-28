@@ -157,6 +157,7 @@ never opens or decrypts them.
 | `msgbrowse import` | **All-in-one**: import every configured archive (Signal + iMessage) into one DB. Unset sources are skipped. |
 | `msgbrowse signal-import` | Import/refresh a signal-export archive (incremental, idempotent). `ingest` is a deprecated alias. |
 | `msgbrowse imessage-import` | Import/refresh an imessage-exporter archive (`-f txt`, 4.2.0). Uses `imessage_archive_root`. |
+| `msgbrowse doctor` | Read-only setup diagnostic: checks data dir/DB, archive roots, attachment health (catches non-copy-mode iMessage exports), converter, embeddings, exporters. `--check-llm` adds a TCP reachability probe. Exits non-zero only on a ✗. |
 | `msgbrowse embed` | Compute embeddings for new messages (semantic search). `--prune` reclaims orphans. |
 | `msgbrowse facts` | Extract AI facts about each contact (incremental, cited; shown on the conversation page). `--reset` rebuilds. |
 | `msgbrowse media` | Transcode non-web images (HEIC/TIFF) to cached JPEGs so the gallery can show them. Incremental; `import` runs it automatically. |
