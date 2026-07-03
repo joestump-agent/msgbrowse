@@ -30,10 +30,35 @@ type galleryFileView struct {
 	ContentType string
 }
 
-// linkGroup is a set of deduplicated links sharing a domain.
+// linkGroup is a set of deduplicated links sharing a domain. Total is the
+// domain's distinct-URL count across the whole filtered result, not just the
+// links loaded so far, so the badge stays truthful when a domain spans
+// infinite-scroll page boundaries.
 type linkGroup struct {
 	Domain string
+	Total  int
 	Links  []store.LinkItem
+}
+
+// galleryImagesData / galleryFilesData / galleryLinksData are the per-tab
+// page payloads shared by the full gallery render and the /gallery/items
+// infinite-scroll fragments (SPEC-0008 REQ-0008-009). NextURL, when non-empty,
+// is the /gallery/items URL of the next page; the templates render it as an
+// hx-trigger="revealed" sentinel, the same load-more pattern the transcript
+// uses.
+type galleryImagesData struct {
+	Images  []store.MediaItem
+	NextURL string
+}
+
+type galleryFilesData struct {
+	Files   []galleryFileView
+	NextURL string
+}
+
+type galleryLinksData struct {
+	Groups  []linkGroup
+	NextURL string
 }
 
 type galleryData struct {
@@ -45,9 +70,9 @@ type galleryData struct {
 	Filter              galleryFilterForm
 	Sources             []string
 	Counts              store.MediaCounts
-	Images              []store.MediaItem
-	Files               []galleryFileView
-	Groups              []linkGroup
+	ImagesPage          galleryImagesData
+	FilesPage           galleryFilesData
+	LinksPage           galleryLinksData
 }
 
 // validTabs are the gallery's three views.
@@ -91,28 +116,77 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 
 	switch form.Tab {
 	case "files":
-		items, err := s.store.ListAttachments(ctx, "file", filter)
+		page, err := s.store.ListAttachments(ctx, "file", filter, 0, 0)
 		if err != nil {
 			s.serverError(w, err)
 			return
 		}
-		data.Files = s.decorateFiles(items)
+		data.FilesPage = galleryFilesData{Files: s.decorateFiles(page.Items), NextURL: form.attachmentsNextURL(page)}
 	case "links":
-		links, err := s.store.ListLinks(ctx, filter)
+		page, err := s.store.ListLinks(ctx, filter, store.LinkCursor{})
 		if err != nil {
 			s.serverError(w, err)
 			return
 		}
-		data.Groups = groupLinksByDomain(links)
+		data.LinksPage = galleryLinksData{Groups: groupLinksByDomain(page.Links), NextURL: form.linksNextURL(page)}
 	default: // images
-		data.Images, err = s.store.ListAttachments(ctx, "image", filter)
+		page, err := s.store.ListAttachments(ctx, "image", filter, 0, 0)
 		if err != nil {
 			s.serverError(w, err)
 			return
 		}
+		data.ImagesPage = galleryImagesData{Images: page.Items, NextURL: form.attachmentsNextURL(page)}
 	}
 
 	s.render(w, r, "gallery", data)
+}
+
+// handleGalleryItems serves one infinite-scroll continuation page for the
+// active gallery tab (SPEC-0008 REQ-0008-009: the links tab used to render
+// ~20k anchors in one response). Cursor parameters are parsed as integers
+// where numeric (bad values read as zero = "from the top"); the string cursor
+// parts only ever travel as bound SQL parameters and re-render through
+// html/template escaping.
+func (s *Server) handleGalleryItems(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	form, filter := parseGalleryFilter(r)
+	q := r.URL.Query()
+
+	switch form.Tab {
+	case "links":
+		cur := store.LinkCursor{
+			Domain: q.Get("after_domain"),
+			Count:  int(parseInt64(q.Get("after_count"))),
+			TSUnix: parseInt64(q.Get("after_ts")),
+			URL:    q.Get("after_url"),
+		}
+		page, err := s.store.ListLinks(ctx, filter, cur)
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		s.render(w, r, "gallery_links_page", galleryLinksData{Groups: groupLinksByDomain(page.Links), NextURL: form.linksNextURL(page)})
+	case "files":
+		page, err := s.store.ListAttachments(ctx, "file", filter, parseInt64(q.Get("after_ts")), parseInt64(q.Get("after_id")))
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		s.render(w, r, "gallery_files_page", galleryFilesData{Files: s.decorateFiles(page.Items), NextURL: form.attachmentsNextURL(page)})
+	default: // images
+		page, err := s.store.ListAttachments(ctx, "image", filter, parseInt64(q.Get("after_ts")), parseInt64(q.Get("after_id")))
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		s.render(w, r, "gallery_images_page", galleryImagesData{Images: page.Items, NextURL: form.attachmentsNextURL(page)})
+	}
+}
+
+// parseInt64 reads a decimal int64, treating garbage as zero (= no cursor).
+func parseInt64(s string) int64 {
+	v, _ := strconv.ParseInt(s, 10, 64)
+	return v
 }
 
 // decorateFiles stats each file in the read-only archive to add size and type.
@@ -165,7 +239,7 @@ func groupLinksByDomain(links []store.LinkItem) []linkGroup {
 			groups[n-1].Links = append(groups[n-1].Links, l)
 			continue
 		}
-		groups = append(groups, linkGroup{Domain: l.Domain, Links: []store.LinkItem{l}})
+		groups = append(groups, linkGroup{Domain: l.Domain, Total: l.DomainTotal, Links: []store.LinkItem{l}})
 	}
 	return groups
 }
@@ -194,10 +268,9 @@ func parseGalleryFilter(r *http.Request) (galleryFilterForm, store.GalleryFilter
 	return form, filter
 }
 
-// GalleryQuery builds the querystring that preserves the current filters when
-// switching tabs (used by the tab links in the template). Exported so the
-// html/template can call it as a method.
-func (f galleryFilterForm) GalleryQuery(tab string) string {
+// filterValues returns the querystring values that preserve the current
+// filters across tab switches and pagination requests.
+func (f galleryFilterForm) filterValues(tab string) url.Values {
 	v := url.Values{}
 	v.Set("tab", tab)
 	if f.ConversationID > 0 {
@@ -212,5 +285,40 @@ func (f galleryFilterForm) GalleryQuery(tab string) string {
 	if f.End != "" {
 		v.Set("end", f.End)
 	}
-	return "/gallery?" + v.Encode()
+	return v
+}
+
+// GalleryQuery builds the querystring that preserves the current filters when
+// switching tabs (used by the tab links in the template). Exported so the
+// html/template can call it as a method.
+func (f galleryFilterForm) GalleryQuery(tab string) string {
+	return "/gallery?" + f.filterValues(tab).Encode()
+}
+
+// attachmentsNextURL builds the /gallery/items URL for the page after this
+// one ("" when the walk is done). The cursor is the (ts_unix, id) keyset pair
+// of the last row, mirroring the transcript's before_ts/before_id contract.
+func (f galleryFilterForm) attachmentsNextURL(page *store.MediaPage) string {
+	if !page.HasMore {
+		return ""
+	}
+	v := f.filterValues(f.Tab)
+	v.Set("after_ts", strconv.FormatInt(page.NextTSUnix, 10))
+	v.Set("after_id", strconv.FormatInt(page.NextID, 10))
+	return "/gallery/items?" + v.Encode()
+}
+
+// linksNextURL builds the /gallery/items URL for the links page after this
+// one ("" when the walk is done). The cursor is the full ordering tuple
+// (domain, count, earliest ts, url) of the last deduplicated row.
+func (f galleryFilterForm) linksNextURL(page *store.LinkPage) string {
+	if !page.HasMore {
+		return ""
+	}
+	v := f.filterValues("links")
+	v.Set("after_domain", page.Next.Domain)
+	v.Set("after_count", strconv.Itoa(page.Next.Count))
+	v.Set("after_ts", strconv.FormatInt(page.Next.TSUnix, 10))
+	v.Set("after_url", page.Next.URL)
+	return "/gallery/items?" + v.Encode()
 }

@@ -282,6 +282,80 @@ INSERT INTO links(message_id, url, domain) VALUES
 	}
 }
 
+// TestMigrateV7ToV8BackfillsTSUnix builds a real v7-shape database
+// (attachments/links without ts_unix), seeds it, and runs the migrate runner.
+// Schema v8 must add the denormalized ts_unix to both tables, backfill every
+// existing row from its owning message, and create the gallery indexes
+// (SPEC-0008 REQ-0008-009).
+func TestMigrateV7ToV8BackfillsTSUnix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v7-to-v8.sqlite")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout%285000%29")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Walk the real migration chain up to v7, exactly as a database that
+	// predates v8 did, then stamp it.
+	for v := 1; v <= 7; v++ {
+		if _, err := db.ExecContext(ctx, migrations[v]); err != nil {
+			t.Fatalf("apply v%d: %v", v, err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA user_version = 7"); err != nil {
+		t.Fatalf("stamp v7: %v", err)
+	}
+
+	seed := `
+INSERT INTO conversations(id, source, name) VALUES (1, 'signal', 'Harper');
+INSERT INTO messages(id, hash, conversation_id, source, ts, ts_unix, sender, body) VALUES
+  (1, 'h1', 1, 'signal', '2022-03-01 09:00:00', 1646125200, 'Harper', 'a photo'),
+  (2, 'h2', 1, 'signal', '2022-03-02 10:00:00', 1646215200, 'Me',     'a link');
+INSERT INTO attachments(message_id, conversation_id, kind, rel_path, original_name) VALUES
+  (1, 1, 'image', 'media/a.jpg', 'a.jpg');
+INSERT INTO links(message_id, conversation_id, url, domain) VALUES
+  (2, 1, 'https://example.com/x', 'example.com');`
+	if _, err := db.ExecContext(ctx, seed); err != nil {
+		t.Fatalf("seed v7 data: %v", err)
+	}
+
+	s := &Store{db: db}
+	if err := s.migrate(ctx); err != nil {
+		t.Fatalf("migrate v7→v8: %v", err)
+	}
+	if v, err := readUserVersion(ctx, db); err != nil || v != schemaVersion {
+		t.Fatalf("user_version = %d (err %v), want %d", v, err, schemaVersion)
+	}
+
+	// Every row carries its owning message's ts_unix — nothing left at the
+	// ALTER's placeholder 0.
+	var attTS, linkTS int64
+	if err := db.QueryRowContext(ctx, `SELECT ts_unix FROM attachments WHERE message_id = 1`).Scan(&attTS); err != nil {
+		t.Fatal(err)
+	}
+	if attTS != 1646125200 {
+		t.Errorf("attachment ts_unix = %d, want 1646125200", attTS)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT ts_unix FROM links WHERE message_id = 2`).Scan(&linkTS); err != nil {
+		t.Fatal(err)
+	}
+	if linkTS != 1646215200 {
+		t.Errorf("link ts_unix = %d, want 1646215200", linkTS)
+	}
+
+	// The gallery indexes exist.
+	var idx int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index'
+		  AND name IN ('idx_attachments_kind_ts', 'idx_links_gallery')`).Scan(&idx); err != nil {
+		t.Fatal(err)
+	}
+	if idx != 2 {
+		t.Errorf("gallery indexes present = %d, want 2", idx)
+	}
+}
+
 // TestMigrateFreshDBStampsLatest ensures a brand-new database lands directly
 // on the latest schema version after Open().
 func TestMigrateFreshDBStampsLatest(t *testing.T) {

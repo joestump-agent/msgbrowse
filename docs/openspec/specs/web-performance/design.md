@@ -121,11 +121,41 @@ can never do time-based revalidation — hence ETags.)
 
 ### Gallery (REQ-0008-009/010)
 
-`galleryWhere` builds the `messages` join only when a message-scoped filter is
-set. Links tab pages with the same keyset/`LIMIT` pattern the transcript uses.
+Implemented one step past the original "build the `messages` join only when
+filtered" sketch: **schema v8** denormalizes `ts_unix` onto `attachments` and
+`links` (the v7 `conversation_id` pattern again), so *no* gallery path —
+unfiltered or filtered, count or list — touches `messages` for filtering or
+ordering. `messages`/`conversations` appear only as primary-key SEARCHes that
+decorate the ≤ limit page rows.
+
+- Counts: single-table covering-index scans (`idx_attachments_kind`;
+  `idx_links_gallery (url, ts_unix, domain, conversation_id, message_id)` for
+  `COUNT(DISTINCT url)`). Measured (modernc, reference archive): unfiltered
+  `CountMedia` 576 ms → 10 ms.
+- Attachment listing: walks `idx_attachments_kind_ts (kind, ts_unix)` backward
+  — `(kind, ts_unix, rowid)` *is* the display order, so no sort ever
+  materializes (357 ms → 0.7 ms). The driving index is pinned with
+  `INDEXED BY`: conversation-filtered queries seek
+  `idx_attachments_conv_kind` instead (bounded by the conversation, small
+  residual sort) because the un-ANALYZEd planner otherwise picks the kind_ts
+  walk, which degrades on sparse conversations (104 ms vs 1 ms measured).
+- Links dedup: `GROUP BY url` over the covering index, using SQLite's
+  bare-column `MIN(ts_unix)` guarantee for earliest occurrence, plus one
+  window pass for per-domain totals (2.07 s → 79 ms). A `ROW_NUMBER()` window
+  formulation measured ~450 ms — rejected.
+- All three tabs paginate with the transcript's keyset/`LIMIT`/
+  `hx-trigger="revealed"` contract via `GET /gallery/items` (attachments
+  cursor: `after_ts`/`after_id`; links cursor: the full ordering tuple
+  `after_domain`/`after_count`/`after_ts`/`after_url`). The links tab used to
+  ship ~20k anchors in one response (1.4 MB gzipped → 186 KB).
+
 Lightbox `<img>` gains `loading="lazy"` (lazy images inside `display:none`
 containers are not fetched until the `:target` lightbox opens; the grid tile
-already warmed the cache for the same URL).
+already warmed the cache for the same URL). Lightbox anchors key on attachment
+id, not loop index, so appended pages never collide.
+
+`decorateFiles` stat caching was measured and skipped: the files fragment
+renders in ~11 ms warm (< the 50 ms threshold).
 
 ## Client layer (REQ-0008-011/012)
 
@@ -148,8 +178,11 @@ deferred until containment proves insufficient.
 ## Testing & verification
 
 - Store: golden-equality test — rewrite output == legacy loop output on a
-  fixture DB; migration test v6→v7 backfill correctness; `EXPLAIN QUERY PLAN`
-  assertions that no `messages` join appears in unfiltered gallery counts.
+  fixture DB; migration tests for v6→v7 and v7→v8 backfill correctness;
+  `EXPLAIN QUERY PLAN` assertions that gallery counts never touch `messages`
+  (any filter), listings never SCAN `messages`/`attachments`, and the
+  unfiltered listing carries no temp-B-tree sort; keyset pagination
+  walk tests (bounds, disjointness, completeness, stable domain totals).
 - Web: httptest asserting (a) `HX-Request` responses contain `#main-content`
   and no `app-sidebar`, (b) full requests are byte-stable, (c) gzip round-trip,
   (d) `304` on matching `If-None-Match`.

@@ -53,8 +53,8 @@ type Store interface {
 	TogglePinned(ctx context.Context, convID int64) (bool, error)
 	SearchMessages(ctx context.Context, opts store.SearchOptions) ([]store.SearchHit, error)
 	CountMedia(ctx context.Context, f store.GalleryFilter) (store.MediaCounts, error)
-	ListAttachments(ctx context.Context, kind string, f store.GalleryFilter) ([]store.MediaItem, error)
-	ListLinks(ctx context.Context, f store.GalleryFilter) ([]store.LinkItem, error)
+	ListAttachments(ctx context.Context, kind string, f store.GalleryFilter, cursorTSUnix, cursorID int64) (*store.MediaPage, error)
+	ListLinks(ctx context.Context, f store.GalleryFilter, cur store.LinkCursor) (*store.LinkPage, error)
 	LatestIngestRun(ctx context.Context) (*store.IngestRun, error)
 	ListSnapshots(ctx context.Context) ([]store.Snapshot, error)
 }
@@ -156,6 +156,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /search", s.handleSearch)
 	mux.HandleFunc("GET /search/results", s.handleSearchResults)
 	mux.HandleFunc("GET /gallery", s.handleGallery)
+	mux.HandleFunc("GET /gallery/items", s.handleGalleryItems)
 	mux.HandleFunc("GET /c/{id}", s.handleConversation)
 	mux.HandleFunc("POST /c/{id}/pin", s.handlePin)
 	mux.HandleFunc("GET /c/{id}/messages", s.handleMessages)
