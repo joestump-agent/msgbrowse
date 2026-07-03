@@ -43,6 +43,7 @@ messages. Full documentation lives at
 
 - [Quickstart (`go install`)](#quickstart-go-install)
 - [Alternative: Docker](#alternative-docker)
+- [Desktop app](#desktop-app)
 - [The data layout it reads](#the-data-layout-it-reads)
 - [Commands](#commands)
 - [Connecting Claude (MCP)](#connecting-claude-mcp)
@@ -146,6 +147,38 @@ host loopback only.
 > `docker compose exec ollama ollama pull nomic-embed-text` / `… pull llama3.1`.
 > If LiteLLM runs on the Docker host instead, use
 > `http://host.docker.internal:4000/v1`.
+
+## Desktop app
+
+msgbrowse also ships as a native desktop app (`msgbrowse-desktop`): a
+[Wails v2](https://wails.io) window over the exact same embedded web server —
+same pages, same handlers, zero divergence from `msgbrowse serve`. Webview
+shells can't be cross-compiled, so per-OS artifacts are built by a CI matrix
+([`desktop.yml`](.github/workflows/desktop.yml)) on `v*` tags and downloadable
+from those workflow runs. **All artifacts are unsigned in v1** (signing and
+notarization are deferred — [ADR-0017](docs/adr/0017-desktop-shell-wails.md)).
+Browser mode (`msgbrowse serve`) remains the universal fallback on every
+platform.
+
+**macOS** — download and unzip `msgbrowse-desktop_darwin_universal` (a
+universal arm64+Intel `.app`). Because the app is unsigned, Gatekeeper blocks a
+plain double-click on first launch: **right-click (or Ctrl-click) the app →
+Open → Open** once; afterwards it opens normally.
+
+**Linux** — download `msgbrowse-desktop_linux_amd64` and
+`chmod +x msgbrowse-desktop` (artifact zips don't preserve the execute bit).
+The binary links the system webview, so the WebKit2GTK runtime must be
+installed (Ubuntu 24.04+ / Debian 13:
+`sudo apt-get install libgtk-3-0 libwebkit2gtk-4.1-0`; most GNOME desktops
+already have it). Building from source instead needs the dev headers:
+`sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config`, then
+`make desktop-linux` (on distros still shipping webkit2gtk-4.0:
+`make desktop-linux DESKTOP_TAGS=desktop,production`). No WebKit2GTK? Use
+browser mode.
+
+**Windows** — not built yet; the matrix leg is tracked in
+[#119](https://github.com/joestump/msgbrowse/issues/119). Use browser mode in
+the meantime.
 
 ## The data layout it reads
 
@@ -354,7 +387,9 @@ make test       # run the test suite
 make check      # gofmt + go vet + tests (the CI gate)
 make cover      # coverage summary
 make css        # rebuild internal/web/static/app.css (Tailwind + daisyUI)
-make desktop-linux  # build the Wails desktop shell (cgo, isolated module)
+
+make desktop-linux  # build ./bin/msgbrowse-desktop (cgo; needs GTK3/WebKit2GTK dev packages)
+make desktop-test   # desktop module's headless tests (pure Go, CGO_ENABLED=0)
 ```
 
 **UI styling.** The web UI uses Tailwind CSS + daisyUI with the custom

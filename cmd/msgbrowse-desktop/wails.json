@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "msgbrowse-desktop",
+  "outputfilename": "msgbrowse-desktop",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Joe Stump"
+  },
+  "info": {
+    "companyName": "Joe Stump",
+    "productName": "msgbrowse",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © Joe Stump",
+    "comments": "Local-only browser over your Signal, iMessage, and WhatsApp archives."
+  }
+}

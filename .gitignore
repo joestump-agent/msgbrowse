@@ -3,6 +3,12 @@
 /bin/
 /dist/
 
+# Desktop shell: Wails CLI build output and generated scaffolding — the shell
+# has no JS frontend (wails.json is the only tracked Wails file); the CLI
+# regenerates these on every `wails build`
+/cmd/msgbrowse-desktop/build/
+/cmd/msgbrowse-desktop/frontend/
+
 # Local app data (SQLite DB, vector index, caches) — never commit
 /data/
 *.sqlite
