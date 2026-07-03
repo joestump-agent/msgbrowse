@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -72,12 +75,19 @@ func TestReplaceConversationMessagesAndFTS(t *testing.T) {
 		t.Errorf("fts match 'lease' = %d, want 1", n)
 	}
 
-	// Attachments and links written.
+	// Attachments and links written, stamped with the denormalized
+	// conversation_id (schemaV7) so per-conversation counts stay single-table.
 	if n := scalar(t, st, `SELECT count(*) FROM attachments`); n != 1 {
 		t.Errorf("attachments = %d, want 1", n)
 	}
 	if n := scalar(t, st, `SELECT count(*) FROM links`); n != 1 {
 		t.Errorf("links = %d, want 1", n)
+	}
+	if n := scalar(t, st, `SELECT count(*) FROM attachments WHERE conversation_id = `+itoa64(id)); n != 1 {
+		t.Errorf("attachments with conversation_id=%d = %d, want 1", id, n)
+	}
+	if n := scalar(t, st, `SELECT count(*) FROM links WHERE conversation_id = `+itoa64(id)); n != 1 {
+		t.Errorf("links with conversation_id=%d = %d, want 1", id, n)
 	}
 	if dom := scalarStr(t, st, `SELECT domain FROM links LIMIT 1`); dom != "example.com" {
 		t.Errorf("link domain = %q, want example.com", dom)
@@ -458,4 +468,70 @@ func findPinned(convs []ConversationSummary, id int64) bool {
 		}
 	}
 	return false
+}
+
+func itoa64(n int64) string {
+	return strconv.FormatInt(n, 10)
+}
+
+// TestTogglePinned verifies the direct-UPDATE toggle (SPEC-0008 REQ-0008-005):
+// each call flips the flag without a prior read, and a missing conversation
+// reports found=false instead of an error.
+func TestTogglePinned(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	id, err := st.UpsertConversation(ctx, source.Signal, "Harper")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	found, err := st.TogglePinned(ctx, id)
+	if err != nil || !found {
+		t.Fatalf("TogglePinned #1 = (%v, %v), want (true, nil)", found, err)
+	}
+	if conv, _ := st.GetConversationByID(ctx, id); conv == nil || !conv.Pinned {
+		t.Error("expected pinned after first toggle")
+	}
+
+	found, err = st.TogglePinned(ctx, id)
+	if err != nil || !found {
+		t.Fatalf("TogglePinned #2 = (%v, %v), want (true, nil)", found, err)
+	}
+	if conv, _ := st.GetConversationByID(ctx, id); conv == nil || conv.Pinned {
+		t.Error("expected unpinned after second toggle")
+	}
+
+	found, err = st.TogglePinned(ctx, id+999)
+	if err != nil {
+		t.Fatalf("TogglePinned on missing id: %v", err)
+	}
+	if found {
+		t.Error("TogglePinned on missing id reported found=true")
+	}
+}
+
+// TestConversationSourceName verifies the minimal hot-path lookup (SPEC-0008
+// REQ-0008-005): it returns exactly the conversation's source and name, and
+// sql.ErrNoRows for an id that does not exist.
+func TestConversationSourceName(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	id, err := st.UpsertConversation(ctx, source.IMessage, "MJ")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	src, name, err := st.ConversationSourceName(ctx, id)
+	if err != nil {
+		t.Fatalf("ConversationSourceName: %v", err)
+	}
+	if src != source.IMessage || name != "MJ" {
+		t.Errorf("ConversationSourceName = (%q, %q), want (%q, %q)", src, name, source.IMessage, "MJ")
+	}
+
+	if _, _, err := st.ConversationSourceName(ctx, id+999); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("missing conversation error = %v, want sql.ErrNoRows", err)
+	}
 }

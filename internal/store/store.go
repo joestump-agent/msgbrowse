@@ -284,14 +284,16 @@ func (s *Store) ReplaceConversationMessages(ctx context.Context, convID int64, s
 		return 0, err
 	}
 	defer insMsg.Close()
+	// conversation_id is denormalized onto attachments and links (schemaV7) so
+	// per-conversation counts stay single-table; stamp it on every insert.
 	insAtt, err := tx.PrepareContext(ctx,
-		`INSERT INTO attachments(message_id, kind, rel_path, original_name) VALUES (?, ?, ?, ?)`)
+		`INSERT INTO attachments(message_id, conversation_id, kind, rel_path, original_name) VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, err
 	}
 	defer insAtt.Close()
 	insLink, err := tx.PrepareContext(ctx,
-		`INSERT INTO links(message_id, url, domain) VALUES (?, ?, ?)`)
+		`INSERT INTO links(message_id, conversation_id, url, domain) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -319,12 +321,12 @@ func (s *Store) ReplaceConversationMessages(ctx context.Context, convID int64, s
 			return 0, err
 		}
 		for _, a := range m.Attachments {
-			if _, err := insAtt.ExecContext(ctx, mid, string(a.Kind), a.RelPath, a.OriginalName); err != nil {
+			if _, err := insAtt.ExecContext(ctx, mid, convID, string(a.Kind), a.RelPath, a.OriginalName); err != nil {
 				return 0, fmt.Errorf("insert attachment: %w", err)
 			}
 		}
 		for _, l := range m.Links {
-			if _, err := insLink.ExecContext(ctx, mid, l.URL, signal.Domain(l.URL)); err != nil {
+			if _, err := insLink.ExecContext(ctx, mid, convID, l.URL, signal.Domain(l.URL)); err != nil {
 				return 0, fmt.Errorf("insert link: %w", err)
 			}
 		}

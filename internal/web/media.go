@@ -1,6 +1,8 @@
 package web
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,18 +23,21 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	conv, err := s.store.GetConversationByID(ctx, id)
+	// Media serving only needs source+name to resolve the file path; the
+	// minimal lookup avoids GetConversationByID's aggregation (measured 105ms
+	// per image request on the reference archive — SPEC-0008 REQ-0008-005).
+	src, convName, err := s.store.ConversationSourceName(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
-	if conv == nil {
-		http.NotFound(w, r)
-		return
-	}
 
 	rel := r.PathValue("path")
-	full, ok := s.mediaFilePath(conv.Source, conv.Name, rel)
+	full, ok := s.mediaFilePath(src, convName, rel)
 	if !ok {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return

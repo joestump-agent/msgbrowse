@@ -156,6 +156,132 @@ func TestMigrateV5AddsPinnedColumn(t *testing.T) {
 	}
 }
 
+// TestMigrateV6ToV7BackfillsConversationID builds a database at schema v6
+// (attachments/links keyed only by message_id), seeds it, and runs the migrate
+// runner. Schema v7 must add the denormalized conversation_id to both tables,
+// backfill every existing row from messages, and create the counting indexes —
+// with per-conversation counts identical before and after (SPEC-0008
+// REQ-0008-003).
+func TestMigrateV6ToV7BackfillsConversationID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v6-to-v7.sqlite")
+	// No foreign_keys pragma here: this raw handle only lays down DDL and seed
+	// rows; the migrate runner manages enforcement on its own connection.
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout%285000%29")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Walk the real migration chain up to v6, exactly as a database that
+	// predates v7 did, then stamp it.
+	for v := 1; v <= 6; v++ {
+		if _, err := db.ExecContext(ctx, migrations[v]); err != nil {
+			t.Fatalf("apply v%d: %v", v, err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA user_version = 6"); err != nil {
+		t.Fatalf("stamp v6: %v", err)
+	}
+
+	// Seed two conversations with attachments and links hanging off their
+	// messages — the v6 shape has no conversation_id on either child table.
+	seed := `
+INSERT INTO conversations(id, source, name) VALUES (1, 'signal', 'Harper'), (2, 'imessage', 'MJ');
+INSERT INTO messages(id, hash, conversation_id, source, ts, ts_unix, sender, body) VALUES
+  (1, 'h1', 1, 'signal',   '2022-03-01 09:00:00',      1646125200, 'Harper', 'two photos'),
+  (2, 'h2', 1, 'signal',   '2022-03-01 09:01:00',      1646125260, 'Me',     'a lease'),
+  (3, 'h3', 2, 'imessage', 'Nov 13, 2015 5:53:29 AM',  1447394009, 'MJ',     'a link');
+INSERT INTO attachments(message_id, kind, rel_path, original_name) VALUES
+  (1, 'image', 'media/a.jpg', 'a.jpg'),
+  (1, 'image', 'media/b.jpg', 'b.jpg'),
+  (2, 'file',  'media/lease.pdf', 'lease.pdf');
+INSERT INTO links(message_id, url, domain) VALUES
+  (3, 'https://example.com/x', 'example.com'),
+  (1, 'https://example.org/y', 'example.org');`
+	if _, err := db.ExecContext(ctx, seed); err != nil {
+		t.Fatalf("seed v6 data: %v", err)
+	}
+
+	// Per-conversation counts at v6, via the only route v6 has: the messages join.
+	type counts struct{ images, files, links int }
+	joinCounts := func() map[int64]counts {
+		out := map[int64]counts{}
+		for _, convID := range []int64{1, 2} {
+			var c counts
+			if err := db.QueryRowContext(ctx,
+				`SELECT
+				   COALESCE(SUM(CASE WHEN a.kind='image' THEN 1 ELSE 0 END), 0),
+				   COALESCE(SUM(CASE WHEN a.kind='file'  THEN 1 ELSE 0 END), 0)
+				 FROM attachments a JOIN messages m ON m.id = a.message_id
+				 WHERE m.conversation_id = ?`, convID).Scan(&c.images, &c.files); err != nil {
+				t.Fatalf("join attachment counts: %v", err)
+			}
+			if err := db.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM links l JOIN messages m ON m.id = l.message_id
+				  WHERE m.conversation_id = ?`, convID).Scan(&c.links); err != nil {
+				t.Fatalf("join link counts: %v", err)
+			}
+			out[convID] = c
+		}
+		return out
+	}
+	want := joinCounts()
+	if (want[1] != counts{images: 2, files: 1, links: 1}) || (want[2] != counts{links: 1}) {
+		t.Fatalf("seed produced unexpected v6 counts: %+v", want)
+	}
+
+	s := &Store{db: db}
+	if err := s.migrate(ctx); err != nil {
+		t.Fatalf("migrate v6→v7: %v", err)
+	}
+	if v, err := readUserVersion(ctx, db); err != nil || v != schemaVersion {
+		t.Fatalf("user_version = %d (err %v), want %d", v, err, schemaVersion)
+	}
+
+	// Single-table counts through the backfilled column match the v6 join
+	// counts exactly.
+	for _, convID := range []int64{1, 2} {
+		var got counts
+		if err := db.QueryRowContext(ctx,
+			`SELECT
+			   COALESCE(SUM(kind = 'image'), 0),
+			   COALESCE(SUM(kind = 'file'),  0)
+			 FROM attachments WHERE conversation_id = ?`, convID).Scan(&got.images, &got.files); err != nil {
+			t.Fatalf("single-table attachment counts: %v", err)
+		}
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM links WHERE conversation_id = ?`, convID).Scan(&got.links); err != nil {
+			t.Fatalf("single-table link counts: %v", err)
+		}
+		if got != want[convID] {
+			t.Errorf("conversation %d counts after migrate = %+v, want %+v", convID, got, want[convID])
+		}
+	}
+
+	// The backfill reached every row: nothing left at the ALTER's placeholder 0.
+	var unfilled int
+	if err := db.QueryRowContext(ctx,
+		`SELECT (SELECT COUNT(*) FROM attachments WHERE conversation_id = 0)
+		      + (SELECT COUNT(*) FROM links WHERE conversation_id = 0)`).Scan(&unfilled); err != nil {
+		t.Fatal(err)
+	}
+	if unfilled != 0 {
+		t.Errorf("%d attachment/link rows left with conversation_id = 0 after backfill", unfilled)
+	}
+
+	// The counting indexes exist.
+	var idx int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index'
+		  AND name IN ('idx_attachments_conv_kind', 'idx_links_conv')`).Scan(&idx); err != nil {
+		t.Fatal(err)
+	}
+	if idx != 2 {
+		t.Errorf("counting indexes present = %d, want 2", idx)
+	}
+}
+
 // TestMigrateFreshDBStampsLatest ensures a brand-new database lands directly
 // on the latest schema version after Open().
 func TestMigrateFreshDBStampsLatest(t *testing.T) {

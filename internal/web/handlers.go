@@ -3,6 +3,8 @@ package web
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -45,14 +47,19 @@ func (b baseData) UnpinnedConversations() []store.ConversationSummary {
 // baseData loads the shell context shared by every full-page view: the
 // conversation list (sidebar) and the global message count (navbar). activeID is
 // the currently-open conversation (0 when none), used to mark the selected row.
+//
+// The navbar total is summed from the listing's per-conversation counts instead
+// of a standalone COUNT(*) over all messages — that global aggregate measured
+// 133ms per render on the reference archive for a number the sidebar query
+// already knows (SPEC-0008 REQ-0008-004).
 func (s *Server) baseData(ctx context.Context, title string, activeID int64) (baseData, error) {
 	convs, err := s.store.ListConversations(ctx)
 	if err != nil {
 		return baseData{}, err
 	}
-	total, err := s.store.CountMessages(ctx)
-	if err != nil {
-		return baseData{}, err
+	total := 0
+	for i := range convs {
+		total += convs[i].MessageCount
 	}
 	return baseData{
 		Title:         title,
@@ -161,7 +168,9 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 // handlePin toggles a conversation's pinned flag and redirects back to it
 // (REQ-0006-010). It is a plain form POST + 303 redirect — CSP-clean (no inline
 // JS; form-action 'self' already permits the POST) and idempotent enough for the
-// back button. The new state is read first so the toggle is unambiguous.
+// back button. The toggle is a single direct UPDATE in the store — no summary
+// fetch first (SPEC-0008 REQ-0008-005); a missing conversation surfaces as the
+// UPDATE matching no row.
 func (s *Server) handlePin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := parseID(r.PathValue("id"))
@@ -169,17 +178,13 @@ func (s *Server) handlePin(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	active, err := s.store.GetConversationByID(ctx, id)
+	found, err := s.store.TogglePinned(ctx, id)
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
-	if active == nil {
+	if !found {
 		http.NotFound(w, r)
-		return
-	}
-	if err := s.store.SetPinned(ctx, id, !active.Pinned); err != nil {
-		s.serverError(w, err)
 		return
 	}
 	http.Redirect(w, r, "/c/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
@@ -200,10 +205,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The conversation's source/name drive media renderability checks in the
-	// partial; fetch them (cheap, once per scroll page).
-	var src, convName string
-	if active, err := s.store.GetConversationByID(ctx, id); err == nil && active != nil {
-		src, convName = active.Source, active.Name
+	// partial; use the minimal single-row lookup — this runs once per scroll
+	// page, and GetConversationByID's count/identifier/fact aggregation is
+	// wasted here (SPEC-0008 REQ-0008-005). A missing conversation just renders
+	// without media; a real store error is logged, not swallowed.
+	src, convName, err := s.store.ConversationSourceName(ctx, id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		s.log.Error("conversation lookup failed", "error", err, "conversation", id)
 	}
 	s.render(w, "message_list", messageListData{
 		ActiveID:   id,

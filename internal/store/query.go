@@ -84,17 +84,43 @@ type Page struct {
 
 // ListConversations returns every conversation with summary stats, ordered by
 // most-recent activity first. Conversations with no messages sort last.
+//
+// Everything is produced by ONE set-based statement (SPEC-0008 REQ-0008-001;
+// the old base-query-plus-per-conversation fill loop measured 1.0–1.6s and
+// 6,810 queries on the reference archive, this shape 346–388ms). First/last
+// timestamps come from the rows selected by ts_unix ordering — the fm/lm rowid
+// joins — never from MIN/MAX(ts) string aggregation, which sorts iMessage's
+// month-name-first strings alphabetically (REQ-0008-002). The attachment/link
+// counts group the denormalized conversation_id column directly (schemaV7)
+// instead of joining messages. The last-message body ships as a 320-char prefix
+// — plenty for the 80-rune preview — so 2,000+ full bodies never cross the
+// driver. Deliberately NOT a window function: the ROW_NUMBER() variant measured
+// 2.1s on the same archive (see SPEC-0008 design.md's measured rejects).
 func (s *Store) ListConversations(ctx context.Context) ([]ConversationSummary, error) {
 	const q = `
 SELECT c.id, c.name, c.source, c.pinned,
-       COUNT(m.id)                              AS msg_count,
-       COALESCE(MIN(m.ts), '')                  AS first_ts,
-       COALESCE(MAX(m.ts), '')                  AS last_ts,
-       COALESCE(MAX(m.ts_unix), 0)              AS last_unix
+       COALESCE(ms.msg_count, 0)             AS msg_count,
+       COALESCE(fm.ts, '')                   AS first_ts,
+       COALESCE(lm.ts, '')                   AS last_ts,
+       COALESCE(ms.last_unix, 0)             AS last_unix,
+       COALESCE(lm.sender, '')               AS last_sender,
+       COALESCE(substr(lm.body, 1, 320), '') AS last_body,
+       COALESCE(ac.image_count, 0)           AS image_count,
+       COALESCE(ac.file_count, 0)            AS file_count,
+       COALESCE(lc.link_count, 0)            AS link_count
   FROM conversations c
-  LEFT JOIN messages m ON m.conversation_id = c.id
- GROUP BY c.id, c.name, c.source, c.pinned
- ORDER BY last_unix DESC, c.name ASC`
+  LEFT JOIN (SELECT conversation_id, COUNT(*) msg_count, MAX(ts_unix) last_unix
+               FROM messages GROUP BY conversation_id) ms ON ms.conversation_id = c.id
+  LEFT JOIN messages fm ON fm.id = (SELECT m2.id FROM messages m2 WHERE m2.conversation_id = c.id
+                                     ORDER BY m2.ts_unix ASC,  m2.id ASC  LIMIT 1)
+  LEFT JOIN messages lm ON lm.id = (SELECT m2.id FROM messages m2 WHERE m2.conversation_id = c.id
+                                     ORDER BY m2.ts_unix DESC, m2.id DESC LIMIT 1)
+  LEFT JOIN (SELECT conversation_id,
+                    SUM(kind = 'image') image_count, SUM(kind = 'file') file_count
+               FROM attachments GROUP BY conversation_id) ac ON ac.conversation_id = c.id
+  LEFT JOIN (SELECT conversation_id, COUNT(*) link_count
+               FROM links GROUP BY conversation_id) lc ON lc.conversation_id = c.id
+ ORDER BY COALESCE(ms.last_unix, 0) DESC, c.name ASC`
 	rows, err := s.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
@@ -103,37 +129,26 @@ SELECT c.id, c.name, c.source, c.pinned,
 
 	var out []ConversationSummary
 	for rows.Next() {
-		var cs ConversationSummary
-		if err := rows.Scan(&cs.ID, &cs.Name, &cs.Source, &cs.Pinned, &cs.MessageCount, &cs.FirstTS, &cs.LastTS, &cs.LastTSUnix); err != nil {
+		var (
+			cs   ConversationSummary
+			body string
+		)
+		if err := rows.Scan(&cs.ID, &cs.Name, &cs.Source, &cs.Pinned, &cs.MessageCount,
+			&cs.FirstTS, &cs.LastTS, &cs.LastTSUnix, &cs.LastSender, &body,
+			&cs.ImageCount, &cs.FileCount, &cs.LinkCount); err != nil {
 			return nil, err
 		}
+		cs.LastPreview = preview(body, 80)
 		out = append(out, cs)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Enrich with last-message preview and media/link counts. Done per
-	// conversation to keep each query simple and indexed; the conversation count
-	// is small (~100s).
-	for i := range out {
-		if out[i].MessageCount == 0 {
-			continue
-		}
-		if err := s.fillLastMessage(ctx, &out[i]); err != nil {
-			return nil, err
-		}
-		if err := s.fillCounts(ctx, &out[i]); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+	return out, rows.Err()
 }
 
-// SetPinned flips a conversation's pinned flag (REQ-0006-010). The sidebar's
-// PINNED section lists conversations where pinned=1; ordering within each section
-// stays by most-recent activity (the template does the split), so toggling pin
-// only moves a row between sections, it does not re-sort.
+// SetPinned sets a conversation's pinned flag to an explicit state
+// (REQ-0006-010). The sidebar's PINNED section lists conversations where
+// pinned=1; ordering within each section stays by most-recent activity (the
+// template does the split), so toggling pin only moves a row between sections,
+// it does not re-sort.
 func (s *Store) SetPinned(ctx context.Context, convID int64, pinned bool) error {
 	v := 0
 	if pinned {
@@ -146,6 +161,26 @@ func (s *Store) SetPinned(ctx context.Context, convID int64, pinned bool) error 
 	return nil
 }
 
+// TogglePinned flips a conversation's pinned flag in a single UPDATE — no
+// read-modify-write, so the pin route never pays for a summary fetch first
+// (SPEC-0008 REQ-0008-005). It reports whether the conversation exists, which
+// is all the handler needs for its 404-vs-redirect decision.
+func (s *Store) TogglePinned(ctx context.Context, convID int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET pinned = 1 - pinned WHERE id = ?`, convID)
+	if err != nil {
+		return false, fmt.Errorf("toggle pinned: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// fillLastMessage and fillCounts enrich a SINGLE conversation's summary
+// (GetConversationByID). The sidebar listing must never call them — that was
+// the 3-queries-per-conversation N+1 that SPEC-0008 REQ-0008-001 removed.
 func (s *Store) fillLastMessage(ctx context.Context, cs *ConversationSummary) error {
 	var body string
 	err := s.db.QueryRowContext(ctx,
@@ -160,20 +195,19 @@ func (s *Store) fillLastMessage(ctx context.Context, cs *ConversationSummary) er
 }
 
 func (s *Store) fillCounts(ctx context.Context, cs *ConversationSummary) error {
+	// Single-table counts via the denormalized conversation_id (schemaV7) and
+	// its idx_attachments_conv_kind / idx_links_conv indexes — no messages join.
 	err := s.db.QueryRowContext(ctx,
 		`SELECT
-		   COALESCE(SUM(CASE WHEN a.kind='image' THEN 1 ELSE 0 END), 0),
-		   COALESCE(SUM(CASE WHEN a.kind='file'  THEN 1 ELSE 0 END), 0)
-		 FROM attachments a
-		 JOIN messages m ON m.id = a.message_id
-		 WHERE m.conversation_id = ?`, cs.ID).Scan(&cs.ImageCount, &cs.FileCount)
+		   COALESCE(SUM(kind = 'image'), 0),
+		   COALESCE(SUM(kind = 'file'),  0)
+		 FROM attachments
+		 WHERE conversation_id = ?`, cs.ID).Scan(&cs.ImageCount, &cs.FileCount)
 	if err != nil {
 		return err
 	}
 	return s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM links l
-		   JOIN messages m ON m.id = l.message_id
-		  WHERE m.conversation_id = ?`, cs.ID).Scan(&cs.LinkCount)
+		`SELECT COUNT(*) FROM links WHERE conversation_id = ?`, cs.ID).Scan(&cs.LinkCount)
 }
 
 // GetConversation returns a single conversation summary by name.
@@ -190,15 +224,24 @@ func (s *Store) GetConversation(ctx context.Context, name string) (*Conversation
 }
 
 // GetConversationByID returns a single conversation summary by id.
+//
+// First/last timestamps are read from the rows selected by ts_unix ordering —
+// indexed LIMIT-1 probes on idx_messages_conv_ts — not MIN/MAX(ts) string
+// aggregation, which is chronologically wrong for iMessage's month-name-first
+// ts strings (SPEC-0008 REQ-0008-002).
 func (s *Store) GetConversationByID(ctx context.Context, id int64) (*ConversationSummary, error) {
 	cs := ConversationSummary{ID: id}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT c.name, c.source, c.pinned,
-		        COUNT(m.id), COALESCE(MIN(m.ts),''), COALESCE(MAX(m.ts),''), COALESCE(MAX(m.ts_unix),0)
+		        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id),
+		        COALESCE((SELECT m.ts FROM messages m WHERE m.conversation_id = c.id
+		                   ORDER BY m.ts_unix ASC,  m.id ASC  LIMIT 1), ''),
+		        COALESCE((SELECT m.ts FROM messages m WHERE m.conversation_id = c.id
+		                   ORDER BY m.ts_unix DESC, m.id DESC LIMIT 1), ''),
+		        COALESCE((SELECT m.ts_unix FROM messages m WHERE m.conversation_id = c.id
+		                   ORDER BY m.ts_unix DESC, m.id DESC LIMIT 1), 0)
 		   FROM conversations c
-		   LEFT JOIN messages m ON m.conversation_id = c.id
-		  WHERE c.id = ?
-		  GROUP BY c.id, c.name, c.source, c.pinned`, id).
+		  WHERE c.id = ?`, id).
 		Scan(&cs.Name, &cs.Source, &cs.Pinned, &cs.MessageCount, &cs.FirstTS, &cs.LastTS, &cs.LastTSUnix)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -604,12 +647,33 @@ func (s *Store) MessageConversationID(ctx context.Context, messageID int64) (int
 }
 
 // NewestMessageTS returns the latest message timestamp across all conversations
-// ("" if the database is empty) — used to show export freshness.
+// ("" if the database is empty) — used to show export freshness. The row is
+// picked by ts_unix through idx_messages_ts_unix: a sub-ms probe where the old
+// MAX(ts) string aggregation full-scanned 405k rows (430ms) AND sorted iMessage
+// month-name strings alphabetically (SPEC-0008 REQ-0008-002/004).
 func (s *Store) NewestMessageTS(ctx context.Context) (string, error) {
-	var ts sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT MAX(ts) FROM messages`).Scan(&ts)
+	var ts string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT ts FROM messages ORDER BY ts_unix DESC LIMIT 1`).Scan(&ts)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}
-	return ts.String, nil
+	return ts, nil
+}
+
+// ConversationSourceName is the minimal single-row lookup for handlers that
+// only need a conversation's source and name — media serving, infinite-scroll
+// pages — where GetConversationByID's counts/identifiers/facts aggregation is
+// wasted work on a hot path (SPEC-0008 REQ-0008-005). Returns sql.ErrNoRows
+// when the conversation does not exist.
+func (s *Store) ConversationSourceName(ctx context.Context, id int64) (source, name string, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT source, name FROM conversations WHERE id = ?`, id).Scan(&source, &name)
+	if err != nil && err != sql.ErrNoRows {
+		return "", "", fmt.Errorf("conversation source/name: %w", err)
+	}
+	return source, name, err
 }

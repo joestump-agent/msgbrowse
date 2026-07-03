@@ -6,7 +6,7 @@ import "context"
 // `user_version` pragma. On Open, the migrations runner brings any older
 // database forward to this version. Bump it and append a migration whenever the
 // schema changes.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // SchemaVersion returns the schema revision this binary expects (and migrates a
 // database forward to on Open). Read-only callers — notably `msgbrowse doctor` —
@@ -45,6 +45,7 @@ var migrations = []string{
 	4: schemaV4,
 	5: schemaV5,
 	6: schemaV6,
+	7: schemaV7,
 }
 
 // schemaV1 is the initial Signal-only schema. It is preserved verbatim so a
@@ -308,4 +309,32 @@ CREATE TABLE IF NOT EXISTS reactions (
     UNIQUE(message_hash, emoji, actor)
 );
 CREATE INDEX IF NOT EXISTS idx_reactions_message_hash ON reactions(message_hash);
+`
+
+// schemaV7 denormalizes conversation_id onto attachments and links so
+// per-conversation media/link counts never have to walk a conversation's
+// messages (SPEC-0008 REQ-0008-003: measured 44–112× faster sidebar counts).
+//
+// The column is a plain copy of the owning message's conversation_id, NOT a
+// foreign key: the existing message_id FK already cascade-deletes these rows
+// with their message, and adding an FK retroactively would force a full table
+// rebuild for no extra integrity. DEFAULT 0 exists only because SQLite requires
+// a default when ALTERing a NOT NULL column onto a populated table; the
+// backfill UPDATE below rewrites every row from messages in the same
+// transaction, and the ingest write path (ReplaceConversationMessages) stamps
+// the column on every insert from then on, so 0 never survives outside a
+// corrupt database. The UPDATE ... FROM join form (not a correlated subquery)
+// leaves any orphaned row — impossible while the FK holds — at 0 instead of
+// failing the migration with a NULL.
+const schemaV7 = `
+ALTER TABLE attachments ADD COLUMN conversation_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE links       ADD COLUMN conversation_id INTEGER NOT NULL DEFAULT 0;
+
+UPDATE attachments SET conversation_id = m.conversation_id
+  FROM messages m WHERE m.id = attachments.message_id;
+UPDATE links SET conversation_id = m.conversation_id
+  FROM messages m WHERE m.id = links.message_id;
+
+CREATE INDEX IF NOT EXISTS idx_attachments_conv_kind ON attachments(conversation_id, kind);
+CREATE INDEX IF NOT EXISTS idx_links_conv            ON links(conversation_id);
 `
