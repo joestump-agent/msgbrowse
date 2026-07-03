@@ -16,6 +16,16 @@
     var items = Array.prototype.slice.call(document.querySelectorAll(".conv-item"));
     if (!items.length) return;
 
+    // Precompute the lowercased names once (SPEC-0008 REQ-0008-012): the
+    // reference archive has 2,271 rows, so re-reading + re-lowercasing
+    // data-name on every keystroke was pure waste. The parallel array is
+    // rebuilt whenever initFilter re-runs (htmx:historyRestore re-init below
+    // keeps it in sync with a restored DOM).
+    var names = new Array(items.length);
+    for (var i = 0; i < items.length; i++) {
+      names[i] = (items[i].getAttribute("data-name") || "").toLowerCase();
+    }
+
     var empty = document.querySelector(".sidebar-empty");
     var pinnedUl = document.getElementById("sidebar-pinned");
     var pinnedHead = pinnedUl ? pinnedUl.previousElementSibling : null;
@@ -29,26 +39,45 @@
       return false;
     }
 
+    // setHidden writes el.hidden only when the value actually changes
+    // (REQ-0008-012): unconditional writes dirtied style/layout for every row
+    // on every keystroke even when nothing moved.
+    function setHidden(el, hidden) {
+      if (el.hidden !== hidden) el.hidden = hidden;
+    }
+
     function apply() {
       var q = input.value.trim().toLowerCase();
       var shown = 0;
       for (var i = 0; i < items.length; i++) {
-        var name = (items[i].getAttribute("data-name") || "").toLowerCase();
-        var match = q === "" || name.indexOf(q) !== -1;
-        items[i].hidden = !match;
+        var match = q === "" || names[i].indexOf(q) !== -1;
+        setHidden(items[i], !match);
         if (match) shown++;
       }
-      if (empty) empty.hidden = shown !== 0;
+      if (empty) setHidden(empty, shown !== 0);
       // Drop the PINNED header + list entirely when nothing in it matches, so a
       // filtered-out section doesn't leave a dangling "Pinned" label.
       if (pinnedUl && pinnedHead) {
         var visible = anyVisible(pinnedUl);
-        pinnedUl.hidden = !visible;
-        pinnedHead.hidden = !visible;
+        setHidden(pinnedUl, !visible);
+        setHidden(pinnedHead, !visible);
       }
     }
 
-    input.addEventListener("input", apply);
+    // Coalesce input events with requestAnimationFrame (REQ-0008-012): a fast
+    // typist fires several input events per frame; only one trailing visibility
+    // pass runs per frame, and apply() reads input.value at run time so the
+    // pass always sees the latest text.
+    var rafId = 0;
+    function schedule() {
+      if (rafId) return;
+      rafId = requestAnimationFrame(function () {
+        rafId = 0;
+        apply();
+      });
+    }
+
+    input.addEventListener("input", schedule);
     apply();
   }
 

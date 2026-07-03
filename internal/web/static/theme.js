@@ -26,9 +26,22 @@
   document.addEventListener("click", function (e) {
     var btn = e.target.closest && e.target.closest("[data-theme-toggle]");
     if (!btn) return;
-    var current = document.documentElement.getAttribute("data-theme") || DARK;
+    var html = document.documentElement;
+    var current = html.getAttribute("data-theme") || DARK;
     var next = current === DARK ? LIGHT : DARK;
-    document.documentElement.setAttribute("data-theme", next);
+    // Theme-switch guard (SPEC-0008 REQ-0008-011): .theme-switching disables
+    // all CSS transitions (see input.css) while data-theme flips, so the swap
+    // is one style recalc instead of thousands of elements animating their
+    // colors. Removed on a double rAF: the first rAF fires before the paint
+    // that reflects the new theme, the second fires after it has been
+    // committed, so transitions come back only once the swap is on screen.
+    html.classList.add("theme-switching");
+    html.setAttribute("data-theme", next);
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        html.classList.remove("theme-switching");
+      });
+    });
     try {
       localStorage.setItem(KEY, next);
     } catch (e) {
