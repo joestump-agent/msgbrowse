@@ -3,7 +3,7 @@ package store
 import "testing"
 
 // TestPreview covers the sidebar excerpt cleanup: raw Markdown must never leak
-// (images collapse to a 📷 placeholder, links to their text), invisible Cf
+// (images collapse to a 📷 placeholder, links to their text), zero-width Cf
 // format runes are dropped, leading blockquote markers are stripped, and the
 // result is whitespace-collapsed and rune-truncated.
 func TestPreview(t *testing.T) {
