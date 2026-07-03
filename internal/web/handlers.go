@@ -381,6 +381,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name string, dat
 		s.serverError(w, err)
 		return
 	}
+	// The body varies on the HX-Request header (partial vs full document), so
+	// any HTTP cache between htmx and the server must key on it — the canonical
+	// htmx cache-poisoning footgun. Set on both variants; harmless today
+	// (loopback-only, no cache), load-bearing the day a proxy appears.
+	w.Header().Add("Vary", "HX-Request")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = buf.WriteTo(w)
 }

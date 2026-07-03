@@ -295,3 +295,25 @@ func TestPinFormBoosted(t *testing.T) {
 		t.Errorf("post-pin partial render broken")
 	}
 }
+
+// TestRenderVariesOnHXRequest asserts the Vary: HX-Request header on BOTH the
+// full and partial variants of a page response — the body depends on that
+// header, so any HTTP cache in front must key on it (the classic htmx
+// cache-poisoning footgun; adversarial-review follow-up on #85).
+func TestRenderVariesOnHXRequest(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"full":    get(t, srv, "/"),
+		"partial": getPartial(t, srv, "/"),
+	} {
+		found := false
+		for _, v := range rec.Result().Header.Values("Vary") {
+			if strings.Contains(v, "HX-Request") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s response missing Vary: HX-Request (got %q)", name, rec.Result().Header.Values("Vary"))
+		}
+	}
+}
