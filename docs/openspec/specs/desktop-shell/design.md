@@ -51,13 +51,33 @@ mode too — it's a web page, not a desktop feature.
 - **Choice:** Wails v2 wrapping the system webview around the embedded
   server, per ADR-0017.
 - **Rationale:** Go-native, system webview (small artifacts), and batteries —
-  menus, dock, tray, packaging — that we'd otherwise hand-roll.
+  menus, dock, packaging — that we'd otherwise hand-roll.
 - **Alternatives:** Electron (Chromium+Node bundle — rejected), Tauri (Rust
   toolchain + Go sidecar supervision — rejected), webview/webview_go (kept as
   the documented minimal fallback; identical architecture, fewer batteries),
   Proton Native (unmaintained, React→libui, wrong stack — rejected),
   `serve --open` status quo (rejected as the end state). Full analysis in
   ADR-0017.
+
+### Menubar residency via a systray companion library
+
+- **Choice:** implement the "Menubar residency" and "Menubar quick menu"
+  requirements with a maintained Go systray library (fyne-io/systray, the
+  maintained fork of getlantern/systray) running alongside Wails v2 in the
+  desktop process; window close is intercepted (Wails `OnBeforeClose`) to
+  hide instead of quit.
+- **Rationale:** Wails **v2 has no first-class systray API** (it arrives as a
+  core feature in v3, still pre-stable). fyne-io/systray is cross-platform
+  (macOS/Linux/Windows), cgo on macOS — acceptable, the desktop target is
+  already cgo-isolated — and its menu-item model covers the quick menu
+  (dynamic retitle for the "Copied" acknowledgment, enable/disable for
+  degraded states). The MCP status line reads the embedded server's health
+  directly in-process; clipboard writes use the shell's native clipboard API
+  so they work with the window closed.
+- **Alternatives:** waiting for Wails v3 systray (blocks a wanted feature on
+  an alpha); a second helper process for the tray (IPC complexity for no
+  gain); menubar-only via macOS-specific NSStatusItem bindings (loses
+  Linux/Windows parity).
 
 ### Loopback HTTP on an ephemeral port, not the Wails asset handler
 
@@ -200,8 +220,8 @@ Rollback at any step is deletion: nothing in the core depends on the shell.
   acceptable — first external user?
 - **Wails v3.** Currently pre-stable; it reworks the application/window API.
   Adopt on stable release or skip v2 hardening work that v3 would discard?
-- **Tray + open-at-login.** Spec'd as MAY; decide whether either makes v1 or
-  waits for demand.
+- **Open-at-login.** Still MAY; menubar residency (now a MUST, owner request
+  2026-07-03) makes it the natural companion — decide with the menubar story.
 - **Settings page scope creep.** `/settings` starts as Connect (MCP + QR);
   whether runtime-editable settings (theme, roots) ever live there is a
   separate future spec.
