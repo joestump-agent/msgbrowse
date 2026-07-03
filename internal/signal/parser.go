@@ -22,14 +22,21 @@ var (
 	linkRe = regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
 	// urlRe matches a bare http(s) URL up to the first whitespace or delimiter.
 	urlRe = regexp.MustCompile(`https?://[^\s<>()\[\]"'` + "`" + `]+`)
-	// reactionLineRe matches signal-export's reactions trailer on its own line,
-	// e.g. "(- Alice: 👍, Bob: ❤️ -)". signal-export writes reactions by appending
-	// "\n(- <Name>: <emoji>, … -)" to the body (sigexport/models.py, Message.to_md
-	// / from_md: https://github.com/carderne/signal-export/blob/main/sigexport/models.py),
-	// so the trailer is always the final line of a message. Anchored to a full line
-	// (with optional surrounding whitespace) so an in-body parenthetical never
-	// matches. Group 1 captures the inner "Name: emoji, …" list.
-	reactionLineRe = regexp.MustCompile(`(?m)^[ \t]*\(- (.*) -\)[ \t]*$`)
+	// reactionLineRe matches signal-export's reactions trailer at the end of a
+	// message, e.g. "(- Alice: 👍, Bob: ❤️ -)". signal-export orders a message as
+	// {text}{reactions}{attachments} (sigexport/models.py, Message.to_md / from_md:
+	// https://github.com/carderne/signal-export/blob/main/sigexport/models.py): for
+	// a text-only message the trailer is the final line, but when the message has
+	// an attachment its Markdown follows the trailer on the SAME line, e.g.
+	// "(- Joe: ❤️ -)![img](./media/x.jpeg)". The trailer therefore anchors to the
+	// start of a line (after optional whitespace) and may be followed by one or
+	// more attachment Markdown tokens before end-of-line. Group 1 captures the
+	// inner "Name: emoji, …" list (non-greedy, so it stops at the first " -)");
+	// group 2 captures any trailing attachment Markdown so it can be kept in the
+	// cleaned body. The attachment target uses ".*" (not "[^)]*") because Signal
+	// media names routinely contain parentheses, e.g. "Image_from_iOS_(1).jpg"; the
+	// "[ \t]*$" anchor keeps the greedy ".*" from running past the line.
+	reactionLineRe = regexp.MustCompile(`(?m)^[ \t]*\(- (.*?) -\)((?:[ \t]*!?\[[^\]]*\]\(.*\))*)[ \t]*$`)
 )
 
 // trailingURLPunct is stripped from the end of bare URLs (sentence punctuation
@@ -225,32 +232,54 @@ func extract(body string) ([]Attachment, []Link) {
 
 // extractReactions splits a signal-export reactions trailer off the END of a
 // message body and returns the cleaned body plus the parsed reactions. The
-// trailer is "(- <Name>: <emoji>, … -)" on its own (final) line; each entry is
-// "<Name>: <emoji>" joined by ", ". To mirror signal-export's own tolerant
-// round-trip (sigexport/models.py from_md splits each entry on the FIRST colon),
-// the reactor name is everything before the first ": " and the emoji is the rest,
-// so an emoji or name containing a colon is preserved. Entries without a ": "
-// separator are skipped. A body with no trailer is returned unchanged with nil
-// reactions.
+// trailer is "(- <Name>: <emoji>, … -)"; for a text-only message it is the final
+// line, and for a message with an attachment the attachment Markdown follows it
+// on the same line and is preserved in the cleaned body (so extract() still sees
+// it). A body whose final "(- … -)" parses to no reactions — or that has no
+// trailer at all — is returned unchanged with nil reactions.
 func extractReactions(body string) (string, []Reaction) {
 	all := reactionLineRe.FindAllStringSubmatchIndex(body, -1)
 	if all == nil {
 		return body, nil
 	}
-	// signal-export always appends the reactions trailer as the FINAL line, so the
-	// trailer (if any) is the LAST matching line — take it, not the first. An
-	// earlier `(- … -)` line is an in-body parenthetical and is left alone.
+	// signal-export always writes the reactions trailer last, so the trailer (if
+	// any) is the LAST matching line — take it, not the first. An earlier `(- … -)`
+	// line is an in-body parenthetical and is left alone.
 	loc := all[len(all)-1]
-	// Confirm it really is the trailer: nothing but whitespace may follow it.
+	// Confirm it really is the trailer: nothing but whitespace may follow the line.
 	if strings.TrimSpace(body[loc[1]:]) != "" {
 		return body, nil
 	}
-	inner := body[loc[2]:loc[3]]
+	reactions := parseReactionEntries(body[loc[2]:loc[3]])
+	if len(reactions) == 0 {
+		// The inner text parsed to no reactions, so this is an ordinary
+		// parenthetical (e.g. "(- a note -)"), not signal-export's trailer — leave
+		// the body untouched.
+		return body, nil
+	}
+	// Strip only the "(- … -)" token (and any blank line it sat on). When the
+	// message has an attachment, its Markdown trails the token on the same line
+	// (group 2); re-append it so extract() still records the attachment.
+	cleaned := strings.TrimRight(body[:loc[0]], "\n \t")
+	if loc[4] >= 0 {
+		if att := strings.TrimSpace(body[loc[4]:loc[5]]); att != "" {
+			if cleaned != "" {
+				cleaned += "\n"
+			}
+			cleaned += att
+		}
+	}
+	return cleaned, reactions
+}
+
+// parseReactionEntries splits a signal-export reaction list ("Name: emoji,
+// Name2: emoji2") into reactions. Each entry splits on its LAST ": ": the emoji
+// never contains ": ", but a reactor's display name can, so the colon-free tail
+// is the emoji and everything before it is the name. Entries without a ": "
+// separator, or with an empty emoji, are skipped.
+func parseReactionEntries(inner string) []Reaction {
 	var reactions []Reaction
 	for _, entry := range strings.Split(inner, ", ") {
-		// Split on the LAST ": ": the emoji never contains ": ", but a reactor's
-		// display name can, so the colon-free tail is the emoji and everything
-		// before it is the name.
 		i := strings.LastIndex(entry, ": ")
 		if i < 0 {
 			continue
@@ -261,9 +290,7 @@ func extractReactions(body string) (string, []Reaction) {
 		}
 		reactions = append(reactions, Reaction{Emoji: emoji, Actor: strings.TrimSpace(entry[:i])})
 	}
-	// Strip the trailer (and any blank line it sat on) from the body.
-	cleaned := strings.TrimRight(body[:loc[0]], "\n \t")
-	return cleaned, reactions
+	return reactions
 }
 
 // ExtractLinks returns the deduplicated bare http(s) URLs in text (with trailing

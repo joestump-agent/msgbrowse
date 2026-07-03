@@ -270,6 +270,99 @@ func TestParseReactions(t *testing.T) {
 			t.Errorf("reaction = %+v, want {👍 \"Dr: Smith\"}", got)
 		}
 	})
+
+	t.Run("reaction on a photo (trailer before an attachment)", func(t *testing.T) {
+		// signal-export orders a message {text}{reactions}{attachments}: an image
+		// message with a reaction puts the attachment Markdown right after the
+		// trailer on the same line. The reaction must be captured and the image
+		// preserved — neither may leak as literal "(- … -)" text.
+		in := "[2022-03-01 09:00:00] MJ:   \n(- Joe: ❤️ -)![photo.jpeg](./media/photo.jpeg)\n"
+		msgs, _, err := ParseAll("MJ", strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("got %d messages, want 1", len(msgs))
+		}
+		if strings.Contains(msgs[0].Body, "(- ") {
+			t.Errorf("reaction trailer leaked into body: %q", msgs[0].Body)
+		}
+		if len(msgs[0].Reactions) != 1 || msgs[0].Reactions[0] != (Reaction{Emoji: "❤️", Actor: "Joe"}) {
+			t.Errorf("reactions = %+v, want [{❤️ Joe}]", msgs[0].Reactions)
+		}
+		if len(msgs[0].Attachments) != 1 || msgs[0].Attachments[0].Kind != KindImage ||
+			msgs[0].Attachments[0].RelPath != "./media/photo.jpeg" {
+			t.Errorf("attachment not preserved: %+v", msgs[0].Attachments)
+		}
+	})
+
+	t.Run("text, then reaction, then attachment", func(t *testing.T) {
+		in := "[2022-03-01 09:00:00] MJ: check this out  \n(- Harper: 😂 -)![y.png](./media/y.png)\n"
+		msgs, _, err := ParseAll("MJ", strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("got %d messages, want 1", len(msgs))
+		}
+		if !strings.Contains(msgs[0].Body, "check this out") || strings.Contains(msgs[0].Body, "(- ") {
+			t.Errorf("body = %q, want text kept and trailer stripped", msgs[0].Body)
+		}
+		if len(msgs[0].Reactions) != 1 || msgs[0].Reactions[0] != (Reaction{Emoji: "😂", Actor: "Harper"}) {
+			t.Errorf("reactions = %+v, want [{😂 Harper}]", msgs[0].Reactions)
+		}
+		if len(msgs[0].Attachments) != 1 || msgs[0].Attachments[0].RelPath != "./media/y.png" {
+			t.Errorf("attachment not preserved: %+v", msgs[0].Attachments)
+		}
+	})
+
+	t.Run("non-reaction parenthetical before an attachment is not stripped", func(t *testing.T) {
+		// "(- see attached -)" has no "Name: emoji" entry, so it parses to zero
+		// reactions and must be left in the body — only the image is extracted.
+		in := "[2022-03-01 09:00:00] MJ: (- see attached -)![z.png](./media/z.png)\n"
+		msgs, _, err := ParseAll("MJ", strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("got %d messages, want 1", len(msgs))
+		}
+		if len(msgs[0].Reactions) != 0 {
+			t.Errorf("non-reaction parenthetical wrongly parsed as reactions: %+v", msgs[0].Reactions)
+		}
+		if !strings.Contains(msgs[0].Body, "(- see attached -)") {
+			t.Errorf("non-reaction parenthetical stripped from body: %q", msgs[0].Body)
+		}
+		if len(msgs[0].Attachments) != 1 {
+			t.Errorf("attachment not extracted: %+v", msgs[0].Attachments)
+		}
+	})
+
+	t.Run("reaction before an attachment whose filename has parentheses", func(t *testing.T) {
+		// Signal media names routinely contain "(1)", "(2006)", etc. The trailer
+		// must still strip when the attachment path has inner parens.
+		in := "[2023-11-02 17:54:54] MJ: Felt cute. Might delete later.  \n" +
+			"(- ArneSkaarFismen: 🔥 -)![Image_from_iOS_(1).jpg](./media/Image_from_iOS_(1).jpg)\n"
+		msgs, _, err := ParseAll("MJ", strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("got %d messages, want 1", len(msgs))
+		}
+		if strings.Contains(msgs[0].Body, "(- ") {
+			t.Errorf("trailer leaked (paren filename): %q", msgs[0].Body)
+		}
+		if len(msgs[0].Reactions) != 1 || msgs[0].Reactions[0] != (Reaction{Emoji: "🔥", Actor: "ArneSkaarFismen"}) {
+			t.Errorf("reactions = %+v, want [{🔥 ArneSkaarFismen}]", msgs[0].Reactions)
+		}
+		// The trailer strips and an image attachment survives. (extract's own
+		// imageRe truncates a path with inner parens — a separate pre-existing bug
+		// tracked elsewhere — so we don't assert the exact RelPath here.)
+		if len(msgs[0].Attachments) != 1 || msgs[0].Attachments[0].Kind != KindImage {
+			t.Errorf("attachment not preserved with parens: %+v", msgs[0].Attachments)
+		}
+	})
 }
 
 func assertMessage(t *testing.T, i int, got, want Message) {
