@@ -337,6 +337,32 @@ func TestParseReactions(t *testing.T) {
 			t.Errorf("attachment not extracted: %+v", msgs[0].Attachments)
 		}
 	})
+
+	t.Run("reaction before an attachment whose filename has parentheses", func(t *testing.T) {
+		// Signal media names routinely contain "(1)", "(2006)", etc. The trailer
+		// must still strip when the attachment path has inner parens.
+		in := "[2023-11-02 17:54:54] MJ: Felt cute. Might delete later.  \n" +
+			"(- ArneSkaarFismen: 🔥 -)![Image_from_iOS_(1).jpg](./media/Image_from_iOS_(1).jpg)\n"
+		msgs, _, err := ParseAll("MJ", strings.NewReader(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("got %d messages, want 1", len(msgs))
+		}
+		if strings.Contains(msgs[0].Body, "(- ") {
+			t.Errorf("trailer leaked (paren filename): %q", msgs[0].Body)
+		}
+		if len(msgs[0].Reactions) != 1 || msgs[0].Reactions[0] != (Reaction{Emoji: "🔥", Actor: "ArneSkaarFismen"}) {
+			t.Errorf("reactions = %+v, want [{🔥 ArneSkaarFismen}]", msgs[0].Reactions)
+		}
+		// The trailer strips and an image attachment survives. (extract's own
+		// imageRe truncates a path with inner parens — a separate pre-existing bug
+		// tracked elsewhere — so we don't assert the exact RelPath here.)
+		if len(msgs[0].Attachments) != 1 || msgs[0].Attachments[0].Kind != KindImage {
+			t.Errorf("attachment not preserved with parens: %+v", msgs[0].Attachments)
+		}
+	})
 }
 
 func assertMessage(t *testing.T, i int, got, want Message) {

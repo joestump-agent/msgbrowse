@@ -33,8 +33,10 @@ var (
 	// more attachment Markdown tokens before end-of-line. Group 1 captures the
 	// inner "Name: emoji, …" list (non-greedy, so it stops at the first " -)");
 	// group 2 captures any trailing attachment Markdown so it can be kept in the
-	// cleaned body.
-	reactionLineRe = regexp.MustCompile(`(?m)^[ \t]*\(- (.*?) -\)((?:[ \t]*!?\[[^\]]*\]\([^)]*\))*)[ \t]*$`)
+	// cleaned body. The attachment target uses ".*" (not "[^)]*") because Signal
+	// media names routinely contain parentheses, e.g. "Image_from_iOS_(1).jpg"; the
+	// "[ \t]*$" anchor keeps the greedy ".*" from running past the line.
+	reactionLineRe = regexp.MustCompile(`(?m)^[ \t]*\(- (.*?) -\)((?:[ \t]*!?\[[^\]]*\]\(.*\))*)[ \t]*$`)
 )
 
 // trailingURLPunct is stripped from the end of bare URLs (sentence punctuation
