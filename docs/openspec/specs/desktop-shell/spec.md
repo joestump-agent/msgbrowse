@@ -66,13 +66,54 @@ desktop and browser modes.
 The desktop app MUST present a native application menu with standard quit
 semantics (Cmd+Q on macOS, and the platform's conventional equivalents), MUST
 appear in the platform's application switcher (macOS Dock presence with the
-app icon), and MUST set a meaningful window title. A tray/menu-bar icon and
-open-at-login registration MAY be provided.
+app icon), and MUST set a meaningful window title. Open-at-login registration
+MAY be provided.
 
 #### Scenario: Quit from the menu
 
 - **WHEN** the user invokes Quit from the application menu (or Cmd+Q on macOS)
 - **THEN** the window closes and the process exits after the embedded server shuts down cleanly.
+
+### Requirement: Menubar residency
+
+The desktop app MUST live in the platform menubar/tray: a status item with the
+app icon MUST be present whenever the app runs, and closing the main window
+MUST hide it rather than quit — the embedded server keeps running and the app
+stays one click away. Quitting MUST be explicit (the tray menu's Quit, the
+application menu, or Cmd+Q). The app SHOULD support launching hidden
+(menubar-only, no window) as its default mode.
+
+#### Scenario: Close-to-tray
+
+- **WHEN** the user closes the main window
+- **THEN** the app stays resident in the menubar with the embedded server running, and choosing "View Messages" from the menubar restores the window.
+
+#### Scenario: Explicit quit from the tray
+
+- **WHEN** the user chooses Quit from the menubar menu
+- **THEN** the embedded server shuts down cleanly and the process exits.
+
+### Requirement: Menubar quick menu
+
+The menubar status item MUST open a menu containing, at minimum: **View
+Messages** (opens or focuses the main window on the transcript UI);
+**Transfer / Pair Device…** (opens the main window deep-linked to the settings
+pairing section showing the SPEC-0011 QR code); an **MCP status line** showing
+the MCP endpoint and live server state (running + port at minimum; a degraded
+state when the embedded server is unhealthy) whose activation copies the MCP
+endpoint URL to the system clipboard; **Copy MCP config** (copies the full
+JSON client-configuration block); and **Quit**. Clipboard actions MUST use the
+native clipboard and MUST work while the main window is closed.
+
+#### Scenario: Copy MCP endpoint from the tray
+
+- **WHEN** the user activates the MCP status item while the main window is closed
+- **THEN** the MCP endpoint URL lands on the system clipboard and the item briefly acknowledges the copy (checkmark or "Copied" retitle).
+
+#### Scenario: Pairing from the tray
+
+- **WHEN** the user chooses "Transfer / Pair Device…"
+- **THEN** the main window opens directly on the settings pairing section with the QR code visible.
 
 ### Requirement: Connect/Settings page in the web app
 
