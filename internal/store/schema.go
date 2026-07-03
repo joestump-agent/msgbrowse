@@ -6,7 +6,7 @@ import "context"
 // `user_version` pragma. On Open, the migrations runner brings any older
 // database forward to this version. Bump it and append a migration whenever the
 // schema changes.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // SchemaVersion returns the schema revision this binary expects (and migrates a
 // database forward to on Open). Read-only callers — notably `msgbrowse doctor` —
@@ -46,6 +46,7 @@ var migrations = []string{
 	5: schemaV5,
 	6: schemaV6,
 	7: schemaV7,
+	8: schemaV8,
 }
 
 // schemaV1 is the initial Signal-only schema. It is preserved verbatim so a
@@ -337,4 +338,33 @@ UPDATE links SET conversation_id = m.conversation_id
 
 CREATE INDEX IF NOT EXISTS idx_attachments_conv_kind ON attachments(conversation_id, kind);
 CREATE INDEX IF NOT EXISTS idx_links_conv            ON links(conversation_id);
+`
+
+// schemaV8 denormalizes the owning message's ts_unix onto attachments and
+// links so the media gallery can count, filter, and time-order both tables
+// without ever touching messages (SPEC-0008 REQ-0008-009; measured on the
+// reference archive: unfiltered attachment listing 357 ms → 10 ms, links
+// dedup+count 2.07 s → ~35 ms). Same design as v7's conversation_id: a plain
+// copy stamped by the ingest write path, backfilled here, with DEFAULT 0 only
+// because SQLite requires one when ALTERing a NOT NULL column onto a populated
+// table.
+//
+// idx_attachments_kind_ts serves the gallery's newest-first walk: with the
+// implicit rowid suffix, ORDER BY ts_unix DESC, id DESC within a kind is
+// exactly a backward index scan — no sort, no messages join.
+//
+// idx_links_gallery is deliberately covering (url, ts_unix, domain,
+// conversation_id, message_id): the links tab deduplicates by URL with
+// COUNT(*) + earliest occurrence, and COUNT(DISTINCT url) feeds the tab badge;
+// both become pure index scans instead of scattered row fetches across the
+// whole table (measured: distinct-URL count 65 ms → 2 ms).
+const schemaV8 = `
+ALTER TABLE attachments ADD COLUMN ts_unix INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE links       ADD COLUMN ts_unix INTEGER NOT NULL DEFAULT 0;
+
+UPDATE attachments SET ts_unix = m.ts_unix FROM messages m WHERE m.id = attachments.message_id;
+UPDATE links SET ts_unix = m.ts_unix FROM messages m WHERE m.id = links.message_id;
+
+CREATE INDEX IF NOT EXISTS idx_attachments_kind_ts ON attachments(kind, ts_unix);
+CREATE INDEX IF NOT EXISTS idx_links_gallery       ON links(url, ts_unix, domain, conversation_id, message_id);
 `

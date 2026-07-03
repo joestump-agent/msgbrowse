@@ -303,11 +303,11 @@ func (s *Server) listMedia(ctx context.Context, _ *mcpsdk.CallToolRequest, in li
 	}
 	var out listMediaOut
 	for _, kind := range kinds {
-		items, err := s.store.ListAttachments(ctx, kind, filter)
+		page, err := s.store.ListAttachments(ctx, kind, filter, 0, 0)
 		if err != nil {
 			return nil, listMediaOut{}, err
 		}
-		for _, it := range items {
+		for _, it := range page.Items {
 			out.Media = append(out.Media, mediaInfo{
 				Conversation: it.ConversationName, Source: it.Source, Kind: it.Kind,
 				Name: it.OriginalName, Path: it.RelPath, Timestamp: it.TS, MessageID: it.MessageID,
@@ -345,27 +345,29 @@ func (s *Server) listLinks(ctx context.Context, _ *mcpsdk.CallToolRequest, in li
 	if err != nil {
 		return nil, listLinksOut{}, err
 	}
-	links, err := s.store.ListLinks(ctx, store.GalleryFilter{ConversationID: convID, Source: in.Source})
-	if err != nil {
-		return nil, listLinksOut{}, err
-	}
-	domain := strings.ToLower(strings.TrimPrefix(in.Domain, "www."))
+	// The domain narrowing runs in SQL (GalleryFilter.Domain hits
+	// idx_links_domain) so the tool sees every matching URL even when the
+	// archive holds more distinct links than one store page.
 	limit := in.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
+	filter := store.GalleryFilter{
+		ConversationID: convID,
+		Source:         in.Source,
+		Domain:         strings.ToLower(strings.TrimPrefix(in.Domain, "www.")),
+		Limit:          limit,
+	}
+	page, err := s.store.ListLinks(ctx, filter, store.LinkCursor{})
+	if err != nil {
+		return nil, listLinksOut{}, err
+	}
 	var out listLinksOut
-	for _, l := range links {
-		if domain != "" && l.Domain != domain {
-			continue
-		}
+	for _, l := range page.Links {
 		out.Links = append(out.Links, linkInfo{
 			URL: l.URL, Domain: l.Domain, Count: l.Count, Conversation: l.ConversationName,
 			Source: l.Source, Timestamp: l.TS, MessageID: l.MessageID,
 		})
-		if len(out.Links) >= limit {
-			break
-		}
 	}
 	return nil, out, nil
 }

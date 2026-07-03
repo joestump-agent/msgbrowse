@@ -9,7 +9,9 @@
        badges and an accent underline on the active tab; a filter row; an Images
        responsive square cover grid with a bottom scrim + mono filename (keeps the
        imgRenderable placeholder logic and the CSS :target lightbox); Files/Links
-       re-skinned to slate cards (Links grouped by domain). */}}
+       re-skinned to slate cards (Links grouped by domain). Each tab renders one
+       keyset page plus an hx-trigger="revealed" load-more sentinel — the same
+       infinite-scroll contract as the transcript (SPEC-0008 REQ-0008-009). */}}
   <div class="px-4 lg:px-6 py-6 max-w-5xl">
     <h1 class="screen-h1 mb-1">Media</h1>
     <p class="screen-sub mb-5">Images, files, and links across your archive.</p>
@@ -50,86 +52,131 @@
 
     <section>
       {{- if eq .Filter.Tab "files"}}
-        {{- if .Files}}
+        {{- if .FilesPage.Files}}
         <ul class="media-list">
-          {{- range .Files}}
-          <li class="media-list-card">
-            <a class="media-file-name" href="{{mediaURL .ConversationID .RelPath}}">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
-            <div class="media-card-meta">
-              {{- if .ContentType}}<span class="font-mono">{{.ContentType}}</span>{{else}}<span class="font-mono">unknown</span>{{end}}
-              {{- if .SizeHuman}} · <span class="font-mono">{{.SizeHuman}}</span>{{end}}
-              · <a href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
-              · <span class="font-mono">{{.TS}}</span>
-              · <span class="source-pill {{sourceSlug .Source}}">{{humanSource .Source}}</span>
-            </div>
-          </li>
-          {{- end}}
+          {{- template "gallery_files_page" .FilesPage}}
         </ul>
         {{- else}}<p class="results-empty">No files match.</p>{{end}}
 
       {{- else if eq .Filter.Tab "links"}}
-        {{- if .Groups}}
-        {{- range .Groups}}
-        <div class="link-group mb-5">
-          <div class="link-group-head">
-            <span class="link-group-domain">{{.Domain}}</span>
-            <span class="link-group-count">{{len .Links}}</span>
-          </div>
-          <ul class="media-list">
-            {{- range .Links}}
-            <li class="media-list-card">
-              <a class="media-link-url" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{.URL}}</a>
-              <div class="media-card-meta">
-                {{- if gt .Count 1}}<span class="font-mono">×{{.Count}}</span> · {{end}}
-                <a href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
-                · <span class="font-mono">{{.TS}}</span>
-                · <span class="source-pill {{sourceSlug .Source}}">{{humanSource .Source}}</span>
-              </div>
-            </li>
-            {{- end}}
-          </ul>
-        </div>
-        {{- end}}
+        {{- if .LinksPage.Groups}}
+        {{- template "gallery_links_page" .LinksPage}}
         {{- else}}<p class="results-empty">No links match.</p>{{end}}
 
       {{- else}}
-        {{- if .Images}}
+        {{- if .ImagesPage.Images}}
+        {{/* Tiles, their :target lightboxes, and the load-more sentinel are all
+             children of the one grid container, so continuation pages swapped in
+             for the sentinel keep filling the same grid (.lightbox is
+             display:none until targeted, so the hidden overlays never occupy
+             grid tracks). */}}
         <div class="image-grid media-grid">
-          {{- range $i, $img := .Images}}
-          {{- if imgRenderable $img.Source $img.ConversationName $img.RelPath}}
-          <a class="media-tile" href="#lb-{{$i}}" title="{{$img.OriginalName}}">
-            <img loading="lazy" src="{{mediaURL $img.ConversationID $img.RelPath}}" alt="{{$img.OriginalName}}">
-            <span class="media-tile-scrim"><span class="media-tile-name">{{if $img.OriginalName}}{{$img.OriginalName}}{{else}}{{$img.RelPath}}{{end}}</span></span>
-          </a>
-          {{- else}}
-          {{/* Non-web format (e.g. HEIC) with no transcoded derivative: show a
-               striped placeholder linking to the original for download, not a
-               broken img. */}}
-          <a class="media-tile media-tile-placeholder" href="{{mediaURL $img.ConversationID $img.RelPath}}" title="{{$img.OriginalName}} (download)">
-            {{template "icon-photo" $}}
-            <span class="ph-name">{{if $img.OriginalName}}{{$img.OriginalName}}{{else}}{{$img.RelPath}}{{end}}</span>
-            <span class="ph-tag">no preview</span>
-          </a>
-          {{- end}}
-          {{- end}}
+          {{- template "gallery_images_page" .ImagesPage}}
         </div>
-        {{/* CSS :target lightboxes — no JavaScript, CSP-safe. Only for images
-             that actually render; placeholders link straight to the file. */}}
-        {{- range $i, $img := .Images}}
-        {{- if imgRenderable $img.Source $img.ConversationName $img.RelPath}}
-        <div class="lightbox" id="lb-{{$i}}">
-          <a class="navbar-toggle lightbox-close absolute top-4 right-4" href="#" title="close">✕</a>
-          <img src="{{mediaURL $img.ConversationID $img.RelPath}}" alt="{{$img.OriginalName}}">
-          <div class="text-sm lightbox-caption">
-            <a class="link-card-title" href="/c/{{$img.ConversationID}}/at/{{$img.MessageID}}#m{{$img.MessageID}}">{{humanName $img.ConversationName}}</a>
-            · <span class="font-mono">{{$img.TS}}</span> · <span class="source-pill {{sourceSlug $img.Source}}">{{humanSource $img.Source}}</span>
-          </div>
-        </div>
-        {{- end}}
-        {{- end}}
         {{- else}}<p class="results-empty">No images match.</p>{{end}}
       {{- end}}
     </section>
   </div>
     </main>
+{{end}}
+
+{{/* gallery_images_page renders one keyset page of image tiles + lightboxes,
+     ending with the next page's load-more sentinel while more pages exist.
+     Lightbox anchors key on the attachment id (stable and unique across
+     pages), not the loop index. Both the grid thumbnail and the hidden
+     lightbox original are loading="lazy" (SPEC-0008 REQ-0008-010): originals
+     download when their lightbox is opened, not with the page. */}}
+{{define "gallery_images_page"}}
+  {{- range .Images}}
+  {{- if imgRenderable .Source .ConversationName .RelPath}}
+  <a class="media-tile" href="#lb-{{.ID}}" title="{{.OriginalName}}">
+    <img loading="lazy" src="{{mediaURL .ConversationID .RelPath}}" alt="{{.OriginalName}}">
+    <span class="media-tile-scrim"><span class="media-tile-name">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span></span>
+  </a>
+  {{/* CSS :target lightbox — no JavaScript, CSP-safe. Only for images that
+       actually render; placeholders link straight to the file. */}}
+  <div class="lightbox" id="lb-{{.ID}}">
+    <a class="navbar-toggle lightbox-close absolute top-4 right-4" href="#" title="close">✕</a>
+    <img loading="lazy" src="{{mediaURL .ConversationID .RelPath}}" alt="{{.OriginalName}}">
+    <div class="text-sm lightbox-caption">
+      <a class="link-card-title" href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
+      · <span class="font-mono">{{.TS}}</span> · <span class="source-pill {{sourceSlug .Source}}">{{humanSource .Source}}</span>
+    </div>
+  </div>
+  {{- else}}
+  {{/* Non-web format (e.g. HEIC) with no transcoded derivative: show a
+       striped placeholder linking to the original for download, not a
+       broken img. */}}
+  <a class="media-tile media-tile-placeholder" href="{{mediaURL .ConversationID .RelPath}}" title="{{.OriginalName}} (download)">
+    {{template "icon-photo" $}}
+    <span class="ph-name">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span>
+    <span class="ph-tag">no preview</span>
+  </a>
+  {{- end}}
+  {{- end}}
+  {{- if .NextURL}}
+  <div class="load-more flex justify-center py-4" hx-get="{{.NextURL}}"
+       hx-trigger="revealed" hx-swap="outerHTML">
+    <span class="loading loading-dots loading-md opacity-60"></span>
+  </div>
+  {{- end}}
+{{end}}
+
+{{/* gallery_files_page renders one keyset page of file cards as <li> items,
+     ending with a load-more <li> sentinel inside the same <ul> while more
+     pages exist. */}}
+{{define "gallery_files_page"}}
+  {{- range .Files}}
+  <li class="media-list-card">
+    <a class="media-file-name" href="{{mediaURL .ConversationID .RelPath}}">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
+    <div class="media-card-meta">
+      {{- if .ContentType}}<span class="font-mono">{{.ContentType}}</span>{{else}}<span class="font-mono">unknown</span>{{end}}
+      {{- if .SizeHuman}} · <span class="font-mono">{{.SizeHuman}}</span>{{end}}
+      · <a href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
+      · <span class="font-mono">{{.TS}}</span>
+      · <span class="source-pill {{sourceSlug .Source}}">{{humanSource .Source}}</span>
+    </div>
+  </li>
+  {{- end}}
+  {{- if .NextURL}}
+  <li class="load-more flex justify-center py-4" hx-get="{{.NextURL}}"
+      hx-trigger="revealed" hx-swap="outerHTML">
+    <span class="loading loading-dots loading-md opacity-60"></span>
+  </li>
+  {{- end}}
+{{end}}
+
+{{/* gallery_links_page renders one keyset page of domain groups, ending with
+     the load-more sentinel while more pages exist. The group badge is the
+     domain's distinct-URL total across the whole filtered result (not just
+     this page); a domain split across a page boundary repeats its header on
+     the continuation, like the transcript's day separators. */}}
+{{define "gallery_links_page"}}
+  {{- range .Groups}}
+  <div class="link-group mb-5">
+    <div class="link-group-head">
+      <span class="link-group-domain">{{.Domain}}</span>
+      <span class="link-group-count">{{.Total}}</span>
+    </div>
+    <ul class="media-list">
+      {{- range .Links}}
+      <li class="media-list-card">
+        <a class="media-link-url" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{.URL}}</a>
+        <div class="media-card-meta">
+          {{- if gt .Count 1}}<span class="font-mono">×{{.Count}}</span> · {{end}}
+          <a href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
+          · <span class="font-mono">{{.TS}}</span>
+          · <span class="source-pill {{sourceSlug .Source}}">{{humanSource .Source}}</span>
+        </div>
+      </li>
+      {{- end}}
+    </ul>
+  </div>
+  {{- end}}
+  {{- if .NextURL}}
+  <div class="load-more flex justify-center py-4" hx-get="{{.NextURL}}"
+       hx-trigger="revealed" hx-swap="outerHTML">
+    <span class="loading loading-dots loading-md opacity-60"></span>
+  </div>
+  {{- end}}
 {{end}}
