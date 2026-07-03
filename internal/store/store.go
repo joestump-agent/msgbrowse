@@ -19,6 +19,11 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo; FTS5 built in)
 )
 
+// DBFileName is the SQLite database file within the data directory. It is the
+// single source of truth for every entry point that opens the store from a
+// resolved config (the CLI and the desktop shell, SPEC-0010).
+const DBFileName = "msgbrowse.sqlite"
+
 // Store wraps the SQLite handle and exposes typed repository methods.
 type Store struct {
 	db *sql.DB

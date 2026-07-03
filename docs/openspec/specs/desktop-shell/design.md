@@ -76,6 +76,18 @@ mode too — it's a web page, not a desktop feature.
   page must display real URLs a *separate* MCP client can reach) would all
   diverge from browser mode. Rejected for v1; revisit only if the loopback
   listener itself becomes a problem.
+- **Mechanics (as built):** Wails v2 has no first-class "open this external
+  URL" option, so the asset handler serves exactly one thing: a static
+  bootstrap trampoline (`<meta http-equiv="refresh">` to the discovered
+  `http://127.0.0.1:<port>/`, no scripts, no styles, `default-src 'none'`
+  CSP). The webview loads it once from the Wails scheme and immediately
+  navigates to the embedded server; every request after that is ordinary
+  loopback HTTP through `internal/web`. On the server side,
+  `web.(*Server).Run` is split into `Listen` (bind, discover port) and
+  `Serve` (block until context cancel, then `http.Server.Shutdown`) so
+  `serve` and the shell share one lifecycle path; the shell wraps them in
+  `cmd/msgbrowse-desktop/internal/embedded`, a pure-Go package that is
+  unit-tested headless with `CGO_ENABLED=0`.
 
 ### Server-side QR rendering
 
@@ -94,18 +106,40 @@ mode too — it's a web page, not a desktop feature.
   data URI keeps the page self-contained and adds no route — not needed
   unless payload size ever makes inline data URIs unwieldy).
 
-### Build isolation: tags + CI matrix
+### Build isolation: nested module + tags + CI matrix
 
-- **Choice:** all Wails/cgo code sits in `cmd/msgbrowse-desktop` behind build
-  tags; desktop binaries are built only in a GitHub Actions matrix (macOS →
+- **Choice:** all Wails/cgo code sits in `cmd/msgbrowse-desktop`, which is
+  its own Go module (`cmd/msgbrowse-desktop/go.mod`, with a
+  `replace github.com/joestump/msgbrowse => ../..` directive) **and** whose
+  files carry the `desktop` build tag; desktop binaries are built only by the
+  desktop Makefile targets and the GitHub Actions matrix (macOS →
   `.app`/dmg, Ubuntu + WebKit2GTK → Linux, Windows → `.exe`).
 - **Rationale:** webview shells cannot cross-compile, and ADR-0013's
-  `CGO_ENABLED=0` core is sacred — the tag gate makes
-  `CGO_ENABLED=0 go build ./...` keep passing everywhere the desktop target
-  isn't explicitly requested, and keeps `make check` fast and pure.
-- **Alternatives:** a separate Go module for the shell (heavier: version
-  skew, replace directives) — rejected while tags suffice; building desktop
-  artifacts locally only (no reproducible releases) — rejected.
+  `CGO_ENABLED=0` core is sacred. Build tags alone gate *compilation* but not
+  *dependency resolution*: `go mod tidy` is build-tag-agnostic, so Wails'
+  large dependency tree would have landed in the root `go.mod`/`go.sum`
+  even though no core build ever compiles it. The nested module keeps the
+  core module file byte-identical to a desktop-free repo; the tag gate
+  additionally guarantees no default `go build` inside the shell directory
+  ever attempts cgo. `./...` at the repository root does not descend into a
+  nested module, so `CGO_ENABLED=0 go build ./...` and `make check` stay
+  pure and fast with no webview toolchain installed.
+- **Costs accepted:** the `replace` directive means the shell always builds
+  against the sibling checkout (fine — it is never published separately), and
+  the shell module pins its own dependency versions (kept aligned via
+  `go mod tidy` in each module).
+- **Alternatives:** tags-only in the root module — rejected because of the
+  go.mod bloat above; building desktop artifacts locally only (no
+  reproducible releases) — rejected.
+- **Build plumbing (as built):** `make desktop-linux` builds the shell into
+  `bin/msgbrowse-desktop` with `-tags desktop,production,webkit2_41`;
+  `make desktop-test` runs the shell module's pure-Go headless tests with
+  `CGO_ENABLED=0`. Neither is a prerequisite of any core target. On Ubuntu
+  24.04 (ie01) Wails v2.12 links `libwebkit2gtk-4.1.so.0` via the
+  `webkit2_41` tag after `apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev
+  pkg-config`; distros still shipping webkit2gtk-4.0 drop that tag
+  (`make desktop-linux DESKTOP_TAGS=desktop,production`). macOS and Windows
+  targets arrive with the CI-matrix story.
 
 ## Architecture
 
@@ -191,10 +225,12 @@ Rollback at any step is deletion: nothing in the core depends on the shell.
 
 ## Open Questions
 
-- **Flag and target names.** The desktop command's flags (config path
-  override? headless escape hatch?), the Makefile target names, and whether
-  the shell reuses `--open`-style conventions are TBD — deliberately not
-  invented here.
+- **Flag and target names.** Partially resolved by the shell story: the
+  desktop command takes a single `-config` flag (same default search path as
+  the CLI), and the Makefile targets are `desktop-linux` / `desktop-test`
+  (per-OS build targets for macOS/Windows land with the CI-matrix story).
+  Further flags (headless escape hatch, `--open`-style conventions) remain
+  TBD.
 - **macOS signing/notarization timeline.** Deferred per ADR-0017; needs an
   Apple Developer ID and CI notary step. When does unsigned stop being
   acceptable — first external user?

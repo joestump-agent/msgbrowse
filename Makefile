@@ -4,6 +4,8 @@
 #   make build     build the msgbrowse binary into ./bin
 #   make test      run the test suite
 #   make check     gofmt + go vet + tests (CI gate)
+#   make desktop-linux build the Linux desktop shell into ./bin (cgo, WebKit2GTK)
+#   make desktop-test  headless tests for the desktop module (pure Go)
 #   make up            bring up the Docker compose stack
 #   make signal-import import the signal-export archive (in the container)
 #   make embed         compute embeddings for new messages (in the container)
@@ -38,7 +40,19 @@ TW_ASSET         := tailwindcss-$(TW_OS)-$(TW_ARCH)
 # build needs no C toolchain and no build tag. Pin CGO off to keep it that way.
 export CGO_ENABLED = 0
 
-.PHONY: all build install run test cover check fmt fmt-check vet tidy clean clean-tools css up up-bundled down logs signal-import embed journal
+# --- Desktop shell (ADR-0017 / SPEC-0010) ---
+# The desktop shell is the repository's only cgo code, quarantined in its own
+# Go module (cmd/msgbrowse-desktop/go.mod) behind the `desktop` build tag so
+# the core stays CGO_ENABLED=0. The desktop targets are never prerequisites of
+# any core target. The Linux build needs the webview dev headers:
+#   sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+# `webkit2_41` links webkit2gtk-4.1 (Ubuntu 24.04+); on distros still shipping
+# webkit2gtk-4.0, override: make desktop-linux DESKTOP_TAGS=desktop,production
+DESKTOP_DIR  := cmd/msgbrowse-desktop
+DESKTOP_BIN  := msgbrowse-desktop
+DESKTOP_TAGS ?= desktop,production,webkit2_41
+
+.PHONY: all build install run test cover check fmt fmt-check vet tidy clean clean-tools css up up-bundled down logs signal-import embed journal desktop-linux desktop-test
 
 all: check build
 
@@ -71,6 +85,12 @@ tidy: ## Tidy go.mod/go.sum
 	$(GO) mod tidy
 
 check: fmt-check vet test ## CI gate: format check, vet, tests
+
+desktop-linux: ## Build the Linux desktop shell into ./bin (cgo; needs GTK3/WebKit2GTK dev packages)
+	cd $(DESKTOP_DIR) && CGO_ENABLED=1 $(GO) build -tags $(DESKTOP_TAGS) -o ../../$(BIN_DIR)/$(DESKTOP_BIN) .
+
+desktop-test: ## Run the desktop module's headless tests (pure Go; no webview toolchain needed)
+	cd $(DESKTOP_DIR) && $(GO) test ./...
 
 css: $(TOOLS_DIR)/tailwindcss $(TOOLS_DIR)/daisyui/package/index.js ## Rebuild internal/web/static/app.css (Tailwind + daisyUI; dev-time only)
 	$(TOOLS_DIR)/tailwindcss \

@@ -67,9 +67,13 @@ whose QR the shared Connect page renders).
 
 The key consequence is that webview bindings **require cgo**. This is
 resolved by isolation, not by surrender: the shell lives in its own build
-target (`cmd/msgbrowse-desktop`, gated by its own build tags) so
-`CGO_ENABLED=0 go build ./...` keeps succeeding for the server, CLI, and MCP
-core. Because webview shells cannot be cross-compiled, desktop binaries are
+target (`cmd/msgbrowse-desktop`, gated by its own build tags — and, as
+implemented, its own nested Go module, because `go mod tidy` is
+build-tag-agnostic and tags alone would have pulled Wails' dependency tree
+into the core `go.mod`/`go.sum`; see the
+[SPEC-0010 design](../openspec/specs/desktop-shell/design.md) "Build
+isolation" decision) so `CGO_ENABLED=0 go build ./...` keeps succeeding for
+the server, CLI, and MCP core. Because webview shells cannot be cross-compiled, desktop binaries are
 built in a GitHub Actions matrix — macOS runner → `.app`/dmg, Ubuntu runner
 with WebKit2GTK → Linux build, Windows runner → `.exe`.
 

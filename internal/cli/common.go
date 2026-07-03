@@ -12,7 +12,7 @@ import (
 )
 
 // dbFileName is the SQLite database file within the data directory.
-const dbFileName = "msgbrowse.sqlite"
+const dbFileName = store.DBFileName
 
 // dbPath returns the absolute path to the SQLite database for the given config.
 func dbPath(cfg *config.Config) string {

@@ -169,24 +169,47 @@ func (s *Server) routes() http.Handler {
 
 // Run starts the HTTP server on addr and blocks until ctx is cancelled, then
 // shuts down gracefully. addr should normally be loopback (127.0.0.1:8787).
+// It is Listen followed by Serve; callers that need the bound address before
+// serving — the desktop shell binds 127.0.0.1:0 and reads the ephemeral port
+// off the listener (SPEC-0010 "Embedded server on a loopback ephemeral port")
+// — call the two halves directly.
 func (s *Server) Run(ctx context.Context, addr string) error {
+	ln, err := s.Listen(addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(ctx, ln)
+}
+
+// Listen opens the TCP listener for addr and logs where the UI is reachable.
+// Passing a ":0" port yields an ephemeral port; the caller discovers it from
+// the returned listener's Addr.
+func (s *Server) Listen(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	bound := ln.Addr().String()
+	if !isLoopback(bound) {
+		s.log.Warn("listening on a non-loopback address; the UI has no authentication", "addr", bound)
+	}
+	s.log.Info("web UI listening", "addr", "http://"+bound)
+	return ln, nil
+}
+
+// Serve serves HTTP on ln and blocks until ctx is cancelled, then shuts down
+// gracefully, draining in-flight requests. This is the single shutdown code
+// path shared by `msgbrowse serve` (whose context is cancelled by
+// SIGINT/SIGTERM) and the desktop shell (whose context is cancelled when the
+// window closes) — SPEC-0010 "Graceful shutdown". Serve closes ln on return.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           s.mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", addr, err)
-	}
-	if !isLoopback(addr) {
-		s.log.Warn("listening on a non-loopback address; the UI has no authentication", "addr", addr)
-	}
-	s.log.Info("web UI listening", "addr", "http://"+addr)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
