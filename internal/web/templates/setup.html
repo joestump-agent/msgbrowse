@@ -73,8 +73,14 @@
     </div>
     {{- end}}
 
+    {{/* Footer copy keyed on the page's real state (issue #162: the old
+         two-way condition showed "No sources are ready to enable" while every
+         card read Enabled): actionable → nudge; everything-enabled → status;
+         only when nothing is actionable AND nothing is enabled → the true
+         empty state. */}}
     <p class="setup-footnote">
       {{- if .AnyActionable}}Detected sources can be enabled from here — enabling runs the bundled exporter and imports the result. Providers stays reachable from the sidebar at any time.
+      {{- else if .AnyEnabled}}All detected sources are enabled. Refresh a source to import what's new. Providers stays reachable from the sidebar at any time.
       {{- else}}No sources are ready to enable on this machine yet. Providers stays reachable from the sidebar at any time.{{end}}
     </p>
   </div>
@@ -97,17 +103,51 @@
             <span class="setup-card-title">{{.Label}}</span>
             {{/* The state badge is text, not color alone (SPEC-0013 §Accessibility). */}}
             <span class="setup-badge setup-badge-{{.State}}">{{.StateLabel}}</span>
+            {{- if eq .State "enabled"}}
+            {{/* Compact icon Refresh beside the badge (issue #162). It re-runs
+                 export + incremental import so only new messages land (SPEC-0013
+                 REQ "Refresh"): POSTs /setup/refresh (same-origin + token gate,
+                 identical to Enable) into this card's own progress region, so it
+                 shares the aria-live surface and the Done sidebar-refresh with
+                 Enable. Icon-only, so the aria-label carries the name. */}}
+            {{template "setup-refresh-button" .}}
+            {{- end}}
           </div>
           <p class="setup-card-detail">{{.Detail}}</p>
           <div class="setup-card-actions">
-            {{- if eq .State "enabled"}}
+            {{- if .ConfirmDisable}}
+            {{/* Inline two-step Disable confirmation (issue #162): step 1 swapped
+                 this state in without mutating anything; only the confirm=1 POST
+                 below deletes. Server-rendered htmx, no JS dialogs (CSP-safe). */}}
+            <span class="setup-note setup-note-warn">Remove {{.Label}}'s imported conversations from this browser? The exported archive stays on disk, so re-enabling is a fast local re-import.</span>
+            <button type="button" class="setup-btn setup-btn-danger"
+                    hx-post="/setup/disable"
+                    hx-vals='{"source": "{{.Source}}", "confirm": "1"}'
+                    hx-headers='{"X-Setup-Token": "{{.Token}}"}'
+                    hx-target="#setup-card-{{.Source}}"
+                    hx-swap="outerHTML"
+                    hx-disabled-elt="this">Disable {{.Label}}</button>
+            {{/* Cancel re-renders the card fresh via Recheck (a probe-only POST
+                 behind the same gate) — no mutation either way. */}}
+            <button type="button" class="setup-btn setup-btn-ghost"
+                    hx-post="/setup/recheck"
+                    hx-vals='{"source": "{{.Source}}"}'
+                    hx-headers='{"X-Setup-Token": "{{.Token}}"}'
+                    hx-target="#setup-card-{{.Source}}"
+                    hx-swap="outerHTML"
+                    hx-disabled-elt="this">Cancel</button>
+            {{- else if eq .State "enabled"}}
+            {{/* Imported footprint (issue #162): what this source actually holds.
+                 HasCounts=false (store hiccup, or Enabled purely via config)
+                 degrades to the plain Imported note. */}}
+            {{- if .HasCounts}}
+            <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{.Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{.Messages}} message{{if ne .Messages 1}}s{{end}}</span>
+            {{- else}}
             <span class="setup-note setup-note-ok">{{template "icon-check" $}} Imported</span>
-            {{/* Refresh re-runs export + incremental import for this source so only
-                 new messages land (SPEC-0013 REQ "Refresh"). It POSTs /setup/refresh
-                 (same-origin + token gate, identical to Enable) and targets this
-                 card's own progress region, so it shares the aria-live surface and
-                 the Done sidebar-refresh with Enable. */}}
-            {{template "setup-refresh-button" .}}
+            {{- end}}
+            {{/* Disable (issue #162): privileged POST behind the same gate as
+                 Enable; the first click swaps in the inline confirm above. */}}
+            {{template "setup-disable-button" .}}
             {{- else if eq .State "needs-permission"}}
             {{/* Detect-and-guide only (ADR-0020): the guidance modal names the exact
                  grant, deep-links the exact System Settings pane, and offers Recheck.
@@ -213,27 +253,46 @@
 {{end}}
 
 {{/* setup-refresh-button takes the whole card (it carries EnableAvailable +
-     Token + Source): a live Refresh button on an Enabled card when an Enabler is
-     wired, a disabled placeholder otherwise. It POSTs /setup/refresh (same-origin
-     + token gate) and targets this source's own progress region, so a Refresh
-     re-uses the exact aria-live surface + Done sidebar-refresh Enable uses.
-     Delta-only is guaranteed by the incremental importer (SPEC-0013 REQ
-     "Refresh"). */}}
+     Token + Source): a live compact icon Refresh beside the Enabled badge
+     (issue #162) when an Enabler is wired, a disabled placeholder otherwise.
+     Icon-only, so the aria-label (and title tooltip) carry the accessible
+     name. It POSTs /setup/refresh (same-origin + token gate) and targets this
+     source's own progress region, so a Refresh re-uses the exact aria-live
+     surface + Done sidebar-refresh Enable uses. Delta-only is guaranteed by
+     the incremental importer (SPEC-0013 REQ "Refresh"). */}}
 {{define "setup-refresh-button"}}
   {{- if .EnableAvailable}}
-  <button type="button" class="setup-btn setup-btn-ghost"
+  <button type="button" class="setup-iconbtn"
           hx-post="/setup/refresh"
           hx-vals='{"source": "{{.Source}}"}'
           hx-headers='{"X-Setup-Token": "{{.Token}}"}'
           hx-target="#setup-progress-{{.Source}}"
           hx-swap="innerHTML"
           hx-disabled-elt="this"
-          aria-label="Refresh {{.Label}}">Refresh</button>
+          title="Refresh {{.Label}}"
+          aria-label="Refresh {{.Label}}">{{template "icon-refresh" $}}</button>
   {{- else}}
-  <button type="button" class="setup-btn setup-btn-ghost" disabled aria-disabled="true"
+  <button type="button" class="setup-iconbtn" disabled aria-disabled="true"
           title="Refreshing needs the desktop app with its bundled exporters, or a configured exporter path"
-          aria-label="Refresh {{.Label}}">Refresh</button>
+          aria-label="Refresh {{.Label}}">{{template "icon-refresh" $}}</button>
   {{- end}}
+{{end}}
+
+{{/* setup-disable-button takes the whole card: the Disable affordance on an
+     Enabled card (issue #162). The POST carries the same same-origin +
+     per-session-token gate as every privileged Setup POST; WITHOUT confirm=1
+     the handler only swaps the card into its inline confirm state (no
+     mutation), which is where the destructive confirm=1 button lives. Always
+     rendered live: Disable is a store-only operation, so it needs no exporter
+     (no EnableAvailable gate). */}}
+{{define "setup-disable-button"}}
+  <button type="button" class="setup-btn setup-btn-ghost"
+          hx-post="/setup/disable"
+          hx-vals='{"source": "{{.Source}}"}'
+          hx-headers='{"X-Setup-Token": "{{.Token}}"}'
+          hx-target="#setup-card-{{.Source}}"
+          hx-swap="outerHTML"
+          hx-disabled-elt="this">Disable</button>
 {{end}}
 
 {{/* setup_progress is the htmx-swapped job-state fragment for one source. While

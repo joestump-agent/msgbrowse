@@ -107,7 +107,7 @@
   {{/* Non-web format (e.g. HEIC) with no transcoded derivative: show a
        striped placeholder linking to the original for download, not a
        broken img. */}}
-  <a class="media-tile media-tile-placeholder" href="{{mediaURL .ConversationID .RelPath}}" title="{{.OriginalName}} (download)">
+  <a class="media-tile media-tile-placeholder" href="{{mediaURL .ConversationID .RelPath}}" title="{{.OriginalName}} (download)" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">
     {{template "icon-photo" $}}
     <span class="ph-name">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span>
     <span class="ph-tag">no preview</span>
@@ -128,7 +128,9 @@
 {{define "gallery_files_page"}}
   {{- range .Files}}
   <li class="media-list-card">
-    <a class="media-file-name" href="{{mediaURL .ConversationID .RelPath}}">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
+    {{/* download (issue #161): file cards save the file — the webview never
+         navigates to a raw response. */}}
+    <a class="media-file-name" href="{{mediaURL .ConversationID .RelPath}}" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
     <div class="media-card-meta">
       {{- if .ContentType}}<span class="font-mono">{{.ContentType}}</span>{{else}}<span class="font-mono">unknown</span>{{end}}
       {{- if .SizeHuman}} · <span class="font-mono">{{.SizeHuman}}</span>{{end}}

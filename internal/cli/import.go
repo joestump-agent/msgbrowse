@@ -91,11 +91,13 @@ func newImportCommand() *cobra.Command {
 
 			// Best-effort: transcode non-web images (HEIC/TIFF) so the gallery can
 			// show them. A missing converter is fine — the UI falls back to
-			// placeholders; run `msgbrowse media` later after installing one.
+			// placeholders; run `msgbrowse media` later after installing one. Roots
+			// are the effective ones (cfg or existing managed root — issue #160).
+			roots := archiveRoots(cfg)
 			if msum, cerr := imageconv.Run(cmd.Context(), st, imageconv.Options{
-				ArchiveRoot:         cfg.ArchiveRoot,
-				IMessageArchiveRoot: cfg.IMessageArchiveRoot,
-				WhatsAppArchiveRoot: cfg.WhatsAppArchiveRoot,
+				ArchiveRoot:         roots.Signal,
+				IMessageArchiveRoot: roots.IMessage,
+				WhatsAppArchiveRoot: roots.WhatsApp,
 				DataDir:             cfg.DataDir,
 			}); cerr != nil {
 				slog.Warn("image transcode step failed; gallery may show placeholders", "error", cerr)

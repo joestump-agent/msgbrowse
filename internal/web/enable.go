@@ -239,7 +239,7 @@ func (s *Server) renderProgress(w http.ResponseWriter, r *http.Request, src stri
 		// mint-at-render contract. Store-presence now reports the source Enabled, so
 		// setupCardFor renders the Enabled card.
 		if cardTok, err := s.setupTokens.mint(); err == nil {
-			card := s.setupCardFor(s.detector(), src, cardTok, s.sourcesPresent(r.Context()))
+			card := s.setupCardFor(s.detector(), src, cardTok, s.sourcesPresent(r.Context()), s.sourceCounts(r.Context()))
 			card.SwapOOB = true
 			if oob, err := s.renderOOB("setup_card", card); err == nil {
 				data.CardOOB = oob

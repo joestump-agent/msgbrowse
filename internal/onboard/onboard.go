@@ -105,9 +105,9 @@ func (p Phase) Terminal() bool {
 }
 
 // ImportResult is the subset of an import run the UI announces: how many
-// conversations and messages the incremental import added. It is deliberately
-// small and importer-agnostic so the orchestration never depends on
-// store.IngestRun.
+// conversations and messages the incremental import added, plus the outcome of
+// the post-import media-transcode step. It is deliberately small and
+// importer-agnostic so the orchestration never depends on store.IngestRun.
 type ImportResult struct {
 	// ConversationsChanged is the number of conversations added or updated.
 	ConversationsChanged int
@@ -115,6 +115,16 @@ type ImportResult struct {
 	MessagesAdded int
 	// MessagesTotal is the store-wide message count after the import.
 	MessagesTotal int
+	// MediaConverted / MediaSkipped / MediaFailed summarize the best-effort
+	// post-import image transcode (HEIC/TIFF → cached JPEG) the Importer runs
+	// after loading the store — the same step `msgbrowse import` runs (issue
+	// #160: without it, desktop-onboarded HEICs never got derivatives). They
+	// ride the ImportResult into the JobLog Summary so the Logs viewer shows
+	// the transcode outcome beside the import counts. All zero when no
+	// converter is available (the UI falls back to placeholders, ADR-0014).
+	MediaConverted int
+	MediaSkipped   int
+	MediaFailed    int
 }
 
 // ToolResolver resolves the exporter executable for one source. The desktop

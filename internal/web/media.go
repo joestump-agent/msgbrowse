@@ -20,7 +20,8 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := parseID(r.PathValue("id"))
 	if !ok {
-		http.NotFound(w, r)
+		s.mediaError(w, r, http.StatusNotFound, "Attachment not found",
+			"That attachment link doesn't point at a known conversation.")
 		return
 	}
 	// Media serving only needs source+name to resolve the file path; the
@@ -28,7 +29,8 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	// per image request on the reference archive — SPEC-0008 REQ-0008-005).
 	src, convName, err := s.store.ConversationSourceName(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
+		s.mediaError(w, r, http.StatusNotFound, "Attachment not found",
+			"That attachment link doesn't point at a known conversation.")
 		return
 	}
 	if err != nil {
@@ -39,7 +41,8 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	rel := r.PathValue("path")
 	full, ok := s.mediaFilePath(src, convName, rel)
 	if !ok {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		s.mediaError(w, r, http.StatusBadRequest, "Attachment unavailable",
+			"This attachment's path can't be resolved inside the archive — the source may not be configured on this machine, or the link is malformed.")
 		return
 	}
 
@@ -63,13 +66,15 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 
 	f, err := os.Open(full)
 	if err != nil {
-		http.NotFound(w, r)
+		s.mediaError(w, r, http.StatusNotFound, "Attachment not found",
+			"This file isn't present in the archive on this machine. A Refresh of the source may bring it in.")
 		return
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || info.IsDir() {
-		http.NotFound(w, r)
+		s.mediaError(w, r, http.StatusNotFound, "Attachment not found",
+			"This file isn't present in the archive on this machine. A Refresh of the source may bring it in.")
 		return
 	}
 
@@ -104,9 +109,11 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 //     SPEC-0009 REQ-0009-006)
 //
 // All go through containWithin, which neutralizes ".." and verifies the result
-// stays inside the base directory.
+// stays inside the base directory. The roots are the live effective ones (cfg
+// or managed — issue #160), resolved per call so an Enable that just created a
+// managed root serves media without a relaunch.
 func (s *Server) mediaFilePath(src, convName, rel string) (string, bool) {
-	return archivepath.Resolve(src, s.roots, convName, rel)
+	return archivepath.Resolve(src, s.archiveRoots(), convName, rel)
 }
 
 // containWithin is a thin wrapper over archivepath.Contain (the shared,

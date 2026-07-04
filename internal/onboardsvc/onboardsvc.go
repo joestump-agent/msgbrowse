@@ -206,9 +206,14 @@ func (im *storeImporter) Import(ctx context.Context, src, root string) (onboard.
 	}
 
 	// Best-effort media transcode scoped to the source's managed root, so an
-	// Enable only transcodes what it just imported. A missing converter falls
-	// back to gallery placeholders (not an error).
-	opts := imageconv.Options{DataDir: im.cfg.DataDir}
+	// Enable/Refresh only transcodes what it just imported — the same step
+	// `msgbrowse import` runs after loading the store (issue #160: without it,
+	// desktop-onboarded HEICs never got derivatives and the gallery showed
+	// placeholders forever). A missing converter falls back to gallery
+	// placeholders (not an error). The summary rides the ImportResult into the
+	// job's JobLog so the Logs viewer shows the transcode outcome (issue #151's
+	// surface), and is logged here for the serve/desktop console.
+	opts := imageconv.Options{DataDir: im.cfg.DataDir, Logger: im.log}
 	switch src {
 	case source.Signal:
 		opts.ArchiveRoot = root
@@ -217,15 +222,22 @@ func (im *storeImporter) Import(ctx context.Context, src, root string) (onboard.
 	case source.WhatsApp:
 		opts.WhatsAppArchiveRoot = root
 	}
-	if _, cerr := imageconv.Run(ctx, im.st, opts); cerr != nil {
-		im.log.Warn("onboardsvc: image transcode step failed; gallery may show placeholders", "source", src, "error", cerr)
-	}
-
-	return onboard.ImportResult{
+	res := onboard.ImportResult{
 		ConversationsChanged: run.ConversationsChanged,
 		MessagesAdded:        run.MessagesAdded,
 		MessagesTotal:        run.MessagesTotal,
-	}, nil
+	}
+	if msum, cerr := imageconv.Run(ctx, im.st, opts); cerr != nil {
+		im.log.Warn("onboardsvc: image transcode step failed; gallery may show placeholders", "source", src, "error", cerr)
+	} else if !msum.NoConverter {
+		res.MediaConverted = msum.Converted
+		res.MediaSkipped = msum.Skipped
+		res.MediaFailed = msum.Failed
+		im.log.Info("onboardsvc: image transcode complete", "source", src,
+			"converted", msum.Converted, "cached", msum.Skipped, "failed", msum.Failed)
+	}
+
+	return res, nil
 }
 
 // Default console command names looked up on $PATH when no override is given,

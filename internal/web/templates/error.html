@@ -1,0 +1,22 @@
+{{define "error"}}{{template "page_start" .}}{{template "error_content" .}}{{template "page_end" .}}{{end}}
+
+{{/* The styled in-app error page (issue #161), used by the media handler's
+     failure paths so a dead attachment link renders app chrome + a message + a
+     way back instead of a bare text response. The HTTP status is set by the
+     handler (mediaError); this template only presents it. Every value is
+     server-chosen — no request-derived text — so html/template escaping is the
+     only encoding needed. Follows the *_content pattern for consistency with
+     every other page (SPEC-0006 UI regions), though media errors always render
+     as full documents (attachment links are never htmx-boosted). */}}
+{{define "error_content"}}<title>{{.Title}}</title>
+    <main id="main-content" class="flex-1">
+  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
+    <h1 class="screen-h1">{{.Heading}}</h1>
+    <div class="notice-card">
+      <p class="link-card-title">{{.Detail}}</p>
+      <p class="link-card-sub">HTTP {{.Status}} · Your archive was not modified.</p>
+    </div>
+    <p><a href="/" class="setup-btn">Back to msgbrowse</a></p>
+  </div>
+    </main>
+{{end}}

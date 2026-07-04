@@ -137,7 +137,10 @@ func TestWhatsAppMediaTraversal(t *testing.T) {
 // invalid rather than falling back to another source's archive.
 func TestWhatsAppMediaUnsetRoot(t *testing.T) {
 	srv, convID := newWhatsAppTestServer(t)
-	srv.roots.WhatsApp = "" // simulate an unset root on the same store
+	// Simulate an unset root on the same store: clear the resolution inputs
+	// (roots are resolved per request from rootsCfg — issue #160).
+	srv.rootsCfg.WhatsAppArchiveRoot = ""
+	srv.rootsCfg.DataDir = t.TempDir() // no managed root either
 	rec := get(t, srv, "/media/"+itoa(convID)+"/"+waMediaRel+"/photo.jpg")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unset whatsapp root status = %d, want 400", rec.Code)

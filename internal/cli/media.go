@@ -36,10 +36,13 @@ func newMediaCommand() *cobra.Command {
 			}
 			defer st.Close()
 
+			// Effective roots (cfg or existing managed root — issue #160), so a
+			// desktop-onboarded data dir transcodes its managed archives too.
+			roots := archiveRoots(cfg)
 			sum, err := imageconv.Run(cmd.Context(), st, imageconv.Options{
-				ArchiveRoot:         cfg.ArchiveRoot,
-				IMessageArchiveRoot: cfg.IMessageArchiveRoot,
-				WhatsAppArchiveRoot: cfg.WhatsAppArchiveRoot,
+				ArchiveRoot:         roots.Signal,
+				IMessageArchiveRoot: roots.IMessage,
+				WhatsAppArchiveRoot: roots.WhatsApp,
 				DataDir:             cfg.DataDir,
 				Concurrency:         conc,
 				Force:               force,

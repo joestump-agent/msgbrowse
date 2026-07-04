@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/joestump/msgbrowse/internal/store"
@@ -139,6 +141,13 @@ type statusData struct {
 	Snapshots         []store.Snapshot
 	NewestTS          string
 	SnapshotFootprint int64
+	// HasSnapshotPipeline gates the Encrypted-DB-snapshots card (issue #164):
+	// on a desktop-onboarded machine there IS no snapshot pipeline (that flow
+	// is the Cowork/launchd Signal export), so "0 B across 0 snapshots … No
+	// snapshots found" read like a failure. True when snapshots are recorded or
+	// the signal archive carries a .snapshots directory; false renders one
+	// neutral line instead of the card.
+	HasSnapshotPipeline bool
 }
 
 // pageSize is the number of messages per transcript page.
@@ -380,13 +389,29 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		footprint += sn.SizeBytes
 	}
 	s.render(w, r, "status", statusData{
-		baseData:          base,
-		ConversationCount: convCount,
-		Run:               run,
-		Snapshots:         snaps,
-		NewestTS:          newest,
-		SnapshotFootprint: footprint,
+		baseData:            base,
+		ConversationCount:   convCount,
+		Run:                 run,
+		Snapshots:           snaps,
+		NewestTS:            newest,
+		SnapshotFootprint:   footprint,
+		HasSnapshotPipeline: len(snaps) > 0 || s.signalSnapshotsDirExists(),
 	})
+}
+
+// signalSnapshotsDirExists reports whether the signal archive carries a
+// .snapshots directory — the on-disk marker of the Cowork/launchd snapshot
+// pipeline (issue #164). Recorded snapshots in the store are the primary
+// signal; this catches a pipeline whose snapshots have not been ingested yet.
+// The effective signal root covers both a configured archive_root and a
+// desktop-managed one (issue #160).
+func (s *Server) signalSnapshotsDirExists() bool {
+	root := s.archiveRoots().Signal
+	if root == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(root, ".snapshots"))
+	return err == nil && info.IsDir()
 }
 
 // render executes a named template into a buffer first, so a template error

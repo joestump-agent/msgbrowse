@@ -85,14 +85,18 @@ func (s *Server) handleSetupRefreshAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Kick off one refresh per Enabled source. sourceConfigured is the app-owned
-	// "Enabled" signal (a configured managed archive root) — never request-derived.
-	// A source whose job is already running returns ErrJobInProgress, which is not
-	// an error here: it is simply already refreshing, and its own progress region
-	// reflects that. Any OTHER start-time error is counted as a failure to start.
+	// Kick off one refresh per Enabled source. Enabled matches the Providers
+	// cards' signal (setupCardFor): imported conversations in the store
+	// (store-presence — the desktop signal, where no cfg root is ever set,
+	// issue #160) OR an explicitly configured archive root. Both are app-owned
+	// values, never request-derived. A source whose job is already running
+	// returns ErrJobInProgress, which is not an error here: it is simply already
+	// refreshing, and its own progress region reflects that. Any OTHER
+	// start-time error is counted as a failure to start.
+	present := s.sourcesPresent(r.Context())
 	var started, alreadyRunning, failed int
 	for _, src := range source.All {
-		if !s.sourceConfigured(src) {
+		if !present[src] && !s.sourceConfigured(src) {
 			continue
 		}
 		_, err := s.enabler.Refresh(src)

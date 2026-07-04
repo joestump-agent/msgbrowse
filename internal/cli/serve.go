@@ -13,6 +13,8 @@ import (
 	"github.com/joestump/msgbrowse/internal/config"
 	"github.com/joestump/msgbrowse/internal/ingest"
 	"github.com/joestump/msgbrowse/internal/onboardsvc"
+	"github.com/joestump/msgbrowse/internal/setup"
+	"github.com/joestump/msgbrowse/internal/source"
 	"github.com/joestump/msgbrowse/internal/store"
 	"github.com/joestump/msgbrowse/internal/syncthing"
 	"github.com/joestump/msgbrowse/internal/web"
@@ -229,13 +231,19 @@ func resolveSyncthingBin(cfg *config.Config) (string, error) {
 }
 
 // ingestOnStart runs a best-effort ingest pass before serving, when configured
-// and an archive is available. The store handle from serve is reused; opening a
+// and an archive is available. The root is the EFFECTIVE Signal root (the
+// configured archive_root, else the managed root a desktop onboarding
+// populated — issue #160). The store handle from serve is reused; opening a
 // second connection to the same SQLite file works (WAL handles it) but muddles
 // ownership.
 func ingestOnStart(ctx context.Context, st *store.Store, cfg *config.Config) error {
-	if err := requireArchive(cfg); err != nil {
+	root := setup.EffectiveRoot(cfg, source.Signal)
+	if root == "" {
+		return requireArchive(cfg) // reports the unset archive_root as before
+	}
+	if err := requireDir("archive_root", "MSGBROWSE_ARCHIVE_ROOT", root); err != nil {
 		return err
 	}
-	_, err := ingest.Run(ctx, st, ingest.Options{ArchiveRoot: cfg.ArchiveRoot})
+	_, err := ingest.Run(ctx, st, ingest.Options{ArchiveRoot: root})
 	return err
 }

@@ -9,9 +9,12 @@
        surfaces/borders, mono tabular values — with no behavioral change. Keeps
        the archive-freshness stat strip, the ingest-run metric grid, and the
        snapshot table. The counts come from dedicated fields (not
-       len .Conversations) so partial renders can skip the sidebar listing. */}}
+       len .Conversations) so partial renders can skip the sidebar listing.
+       Renders inside the Settings shell (issue #163): shared h1 + sub-nav,
+       with /status staying the canonical URL. */}}
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
-    <h1 class="screen-h1">Status &amp; backups</h1>
+    <h1 class="screen-h1">Settings</h1>
+    {{template "settings_subnav" "status"}}
 
     <div class="status-card">
       <div class="status-card-title">Archive freshness</div>
@@ -47,6 +50,12 @@
       {{end}}
     </div>
 
+    {{/* The snapshots card renders only where a snapshot pipeline exists
+         (issue #164): recorded snapshots, or a .snapshots dir in the signal
+         archive. A desktop-onboarded machine has neither — "0 B across 0
+         snapshots … No snapshots found" read like a failure there, so it gets
+         one neutral line instead. */}}
+    {{if .HasSnapshotPipeline}}
     <div class="status-card">
       <div class="status-card-title">Encrypted DB snapshots</div>
       <p class="status-note mb-4">Total footprint: <span class="font-mono">{{humanSize .SnapshotFootprint}}</span> across <span class="font-mono">{{len .Snapshots}}</span> snapshots.
@@ -72,6 +81,9 @@
       <p class="results-empty">No snapshots found under <code class="font-mono">.snapshots/</code>.</p>
       {{end}}
     </div>
+    {{else}}
+    <p class="status-note">No snapshot pipeline on this machine.</p>
+    {{end}}
   </div>
     </main>
 {{end}}

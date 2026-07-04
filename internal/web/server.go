@@ -60,13 +60,29 @@ type Store interface {
 	LatestIngestRun(ctx context.Context) (*store.IngestRun, error)
 	ListSnapshots(ctx context.Context) ([]store.Snapshot, error)
 	SourcesPresent(ctx context.Context) ([]string, error)
+	SourceCounts(ctx context.Context) (map[string]store.SourceCount, error)
+	DeleteSourceData(ctx context.Context, src string) (int64, error)
 }
 
 // Server holds the dependencies shared by all handlers.
 type Server struct {
-	store      Store
-	roots      archivepath.Roots // per-source read-only archive roots
-	derivedDir string            // cache of transcoded JPEGs (<data_dir>/derived)
+	store Store
+	// rootsCfg is the minimal config snapshot (archive roots + data dir) that
+	// archiveRoots() resolves the per-source EFFECTIVE read-only archive roots
+	// from: the configured cfg root when set, else the app-owned managed root
+	// (<data_dir>/archives/<source>) when it exists on disk — issue #160 (the
+	// desktop app imports into managed roots and sets no cfg root, so building
+	// roots from cfg alone broke every /media resolve on desktop). Resolution is
+	// per-call, not boot-time: the FIRST in-session Enable creates the managed
+	// root after NewServer ran, and media must work without a relaunch.
+	rootsCfg config.Config
+	// cfgRoots are the EXPLICITLY configured archive roots only (no managed
+	// fallback). They back sourceConfigured — the app-owned "Enabled" signal for
+	// the Providers cards. The managed roots can exist as empty dirs before any
+	// import (staging/adopt creates them), so an existing managed root must NOT
+	// read as "Enabled"; store-presence is the desktop Enabled signal.
+	cfgRoots   archivepath.Roots
+	derivedDir string // cache of transcoded JPEGs (<data_dir>/derived)
 	tmpl       *template.Template
 	log        *slog.Logger
 	mux        http.Handler
@@ -101,7 +117,17 @@ func NewServer(st Store, cfg *config.Config, log *slog.Logger) (*Server, error) 
 	}
 	s := &Server{
 		store: st,
-		roots: archivepath.Roots{
+		// The root-resolution inputs (issue #160): a value snapshot so a caller
+		// mutating cfg after NewServer cannot skew later resolutions. Effective
+		// roots are computed per call via archiveRoots(); explicit cfg roots are
+		// kept separately for the Enabled signal.
+		rootsCfg: config.Config{
+			ArchiveRoot:         cfg.ArchiveRoot,
+			IMessageArchiveRoot: cfg.IMessageArchiveRoot,
+			WhatsAppArchiveRoot: cfg.WhatsAppArchiveRoot,
+			DataDir:             cfg.DataDir,
+		},
+		cfgRoots: archivepath.Roots{
 			Signal:   cfg.ArchiveRoot,
 			IMessage: cfg.IMessageArchiveRoot,
 			WhatsApp: cfg.WhatsAppArchiveRoot,
@@ -140,6 +166,17 @@ func NewServer(st Store, cfg *config.Config, log *slog.Logger) (*Server, error) 
 	s.staticTags = tags
 	s.mux = s.routes()
 	return s, nil
+}
+
+// archiveRoots resolves the effective per-source archive roots for this
+// request: the configured cfg root when set, else the managed root iff it
+// exists on disk (setup.EffectiveRoots — issue #160). Resolution is per-call
+// rather than cached at construction because the FIRST in-session Enable
+// creates the managed root AFTER NewServer ran — media must resolve without a
+// relaunch. Cost: at most three os.Stat calls (zero for a source with a cfg
+// root), microseconds against the SPEC-0008 millisecond budgets.
+func (s *Server) archiveRoots() archivepath.Roots {
+	return setup.EffectiveRoots(&s.rootsCfg)
 }
 
 // imgRenderable reports whether an image attachment will actually display in an
@@ -206,6 +243,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /setup/refresh-all", s.handleSetupRefreshAll)
 	mux.HandleFunc("POST /setup/cancel", s.handleSetupCancel)
 	mux.HandleFunc("POST /setup/recheck", s.handleSetupRecheck)
+	mux.HandleFunc("POST /setup/disable", s.handleSetupDisable)
 	mux.HandleFunc("GET /setup/status/{source}", s.handleSetupStatus)
 	mux.HandleFunc("GET /settings", s.handleSettings)
 	mux.HandleFunc("GET /media/{id}/{path...}", s.handleMedia)

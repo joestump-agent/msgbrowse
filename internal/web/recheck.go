@@ -56,6 +56,6 @@ func (s *Server) handleSetupRecheck(w http.ResponseWriter, r *http.Request) {
 	// (Needs-permission → Ready) and drops the guidance affordance. Store-presence
 	// still wins (issue #149): a source that already imported reads Enabled here
 	// too.
-	card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(r.Context()))
+	card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(r.Context()), s.sourceCounts(r.Context()))
 	s.renderFragment(w, "setup_card", card)
 }

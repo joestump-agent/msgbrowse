@@ -19,7 +19,10 @@
 {{define "logs_content"}}<title>{{.Title}}</title>
     <main id="main-content" class="flex-1">
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
-    <h1 class="screen-h1">Logs</h1>
+    {{/* Logs renders inside the Settings shell (issue #163): shared h1 +
+         sub-nav, with /logs staying the canonical URL. */}}
+    <h1 class="screen-h1">Settings</h1>
+    {{template "settings_subnav" "logs"}}
     <p class="screen-sub">The most recent Enable and Refresh run for each source — the exporter command,
       its exit status, captured output, and import counts. This is the diagnostic surface for a failed
       Enable or Refresh; nothing here leaves this machine.</p>
@@ -80,6 +83,14 @@
         <span class="log-meta-label">Imported</span>
         <span class="log-meta-value">{{.Summary.ConversationsChanged}} conversations · {{.Summary.MessagesAdded}} messages added</span>
       </div>
+      {{/* The post-import transcode summary (issue #160): rendered only when the
+           step converted or failed anything, so a text-only source stays quiet. */}}
+      {{- if or .Summary.MediaConverted .Summary.MediaSkipped .Summary.MediaFailed}}
+      <div class="log-meta-row">
+        <span class="log-meta-label">Media</span>
+        <span class="log-meta-value">{{.Summary.MediaConverted}} transcoded · {{.Summary.MediaSkipped}} cached · {{.Summary.MediaFailed}} failed</span>
+      </div>
+      {{- end}}
       {{- end}}
     </div>
     {{- if .Output}}

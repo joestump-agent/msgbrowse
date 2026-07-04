@@ -9,6 +9,7 @@ import (
 	"github.com/joestump/msgbrowse/internal/archivepath"
 	"github.com/joestump/msgbrowse/internal/config"
 	"github.com/joestump/msgbrowse/internal/llm"
+	"github.com/joestump/msgbrowse/internal/setup"
 	"github.com/joestump/msgbrowse/internal/store"
 )
 
@@ -41,14 +42,14 @@ func newLLMClient(cfg *config.Config) *llm.OpenAIClient {
 	})
 }
 
-// archiveRoots bundles the configured per-source archive roots for
-// archivepath.Resolve callers (media transcoding, doctor sampling).
+// archiveRoots bundles the EFFECTIVE per-source archive roots for
+// archivepath.Resolve callers (media transcoding, doctor sampling): the
+// configured root when set, else the app-owned managed root
+// (<data_dir>/archives/<source>) when it exists on disk (issue #160 — a
+// desktop-onboarded data dir has managed roots and empty cfg roots, and its
+// media must still resolve for `msgbrowse media` / `doctor`).
 func archiveRoots(cfg *config.Config) archivepath.Roots {
-	return archivepath.Roots{
-		Signal:   cfg.ArchiveRoot,
-		IMessage: cfg.IMessageArchiveRoot,
-		WhatsApp: cfg.WhatsAppArchiveRoot,
-	}
+	return setup.EffectiveRoots(cfg)
 }
 
 // requireArchive verifies the archive root is configured and present.

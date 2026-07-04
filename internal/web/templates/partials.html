@@ -230,8 +230,11 @@
           {{- else}}
           {{/* Files, and images with no browser-renderable rendition (e.g. an
                un-transcoded HEIC), render as a labeled attachment chip:
-               paperclip/photo icon + mono filename. */}}
-          <a class="attach-chip" href="{{mediaURL $.ActiveID .RelPath}}">{{if eq .Kind "image"}}{{template "icon-photo" $}}{{else}}{{template "icon-paperclip" $}}{{end}}<span class="font-mono">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span></a>
+               paperclip/photo icon + mono filename. The download attribute
+               (issue #161) makes the click a file save in every client — the
+               desktop webview must never navigate away to a raw response
+               (belt to the media handler's Content-Disposition braces). */}}
+          <a class="attach-chip" href="{{mediaURL $.ActiveID .RelPath}}" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">{{if eq .Kind "image"}}{{template "icon-photo" $}}{{else}}{{template "icon-paperclip" $}}{{end}}<span class="font-mono">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span></a>
           {{- end}}
         {{- end}}
       </div>

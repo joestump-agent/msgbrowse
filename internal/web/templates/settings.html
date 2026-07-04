@@ -1,5 +1,23 @@
 {{define "settings"}}{{template "page_start" .}}{{template "settings_content" .}}{{template "page_end" .}}{{end}}
 
+{{/* settings_subnav is the Settings shell's sub-navigation (issue #163):
+     Settings · Logs · Status & backups, rendered at the top of each of the
+     three sections' pages so they read as one surface instead of link-card
+     jumps to standalone destinations. The dot is the active tab's token
+     ("settings" / "logs" / "status"); the active tab carries aria-current so
+     the state is conveyed as more than color (SPEC-0013 §Accessibility
+     spirit). Boosted like every in-app nav (SPEC-0008 REQ-0008-006), so
+     switching tabs swaps only #main-content; the old routes stay the canonical
+     URLs — nothing redirects. */}}
+{{define "settings_subnav"}}
+    <nav class="settings-subnav" aria-label="Settings sections"
+         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">
+      <a href="/settings" class="settings-tab{{if eq . "settings"}} settings-tab-active{{end}}"{{if eq . "settings"}} aria-current="page"{{end}}>Settings</a>
+      <a href="/logs" class="settings-tab{{if eq . "logs"}} settings-tab-active{{end}}"{{if eq . "logs"}} aria-current="page"{{end}}>Logs</a>
+      <a href="/status" class="settings-tab{{if eq . "status"}} settings-tab-active{{end}}"{{if eq . "status"}} aria-current="page"{{end}}>Status &amp; backups</a>
+    </nav>
+{{end}}
+
 {{/* settings_content is the boosted-swap unit (SPEC-0008 REQ-0008-006, the
      *_content pattern): <title> keeps history entries titled; the define owns
      <main id="main-content"> so partial responses carry no shell.
@@ -10,7 +28,8 @@
      data-copy-target (no inline handlers — script-src 'self'); confirmations
      are announced through the aria-live region below and shown visually by the
      button's copy→check icon swap. Every value is also selectable text, so
-     nothing depends on the clipboard or the QR image alone. */}}
+     nothing depends on the clipboard or the QR image alone. Logs and Status &
+     backups render under the same shell via the sub-nav above (issue #163). */}}
 {{define "settings_content"}}<title>{{.Title}}</title>
     {{/* hx-history="false": the pairing QR/manual code carries a single-use,
          time-limited pairing secret. Without this, a boosted navigation away
@@ -19,37 +38,13 @@
     <main id="main-content" class="flex-1" hx-history="false">
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
     <h1 class="screen-h1">Settings</h1>
+    {{template "settings_subnav" "settings"}}
     <p class="screen-sub">Connect an MCP client to this archive, or pair another device.</p>
 
     {{/* Copy confirmations land here for assistive tech (SPEC-0010
          §Accessibility "Dynamic feedback"): polite live region, visually
          hidden, updated by copy.js on every successful copy. */}}
     <p id="copy-announce" class="sr-only" aria-live="polite"></p>
-
-    {{/* Diagnostics: "Status & backups" moved here out of the primary sidebar nav
-         (it is a diagnostic destination, not a top-level one), and the Logs viewer
-         (issue #151) — the per-source exporter-log surface for a failed Enable /
-         Refresh — lives beside it. Both are plain links (no boost needed on the
-         settings body); the CSP is unaffected. */}}
-    <section class="status-card space-y-4" aria-labelledby="settings-diagnostics-heading">
-      <h2 id="settings-diagnostics-heading" class="status-card-title">Diagnostics</h2>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <a href="/status" class="link-card">
-          <span class="link-card-icon">{{template "icon-server" .}}</span>
-          <span class="min-w-0">
-            <span class="link-card-title block">Status &amp; backups</span>
-            <span class="link-card-sub block">Archive freshness &amp; snapshots</span>
-          </span>
-        </a>
-        <a href="/logs" class="link-card">
-          <span class="link-card-icon">{{template "icon-document" .}}</span>
-          <span class="min-w-0">
-            <span class="link-card-title block">Logs</span>
-            <span class="link-card-sub block">Exporter runs &amp; import results</span>
-          </span>
-        </a>
-      </div>
-    </section>
 
     <section class="status-card space-y-4" aria-labelledby="settings-mcp-heading">
       <h2 id="settings-mcp-heading" class="status-card-title">MCP server</h2>

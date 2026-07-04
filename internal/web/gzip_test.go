@@ -45,7 +45,9 @@ func TestGzipRoundTripIdenticalBytes(t *testing.T) {
 		if cl := zipped.Header().Get("Content-Length"); cl != "" {
 			t.Errorf("%s kept Content-Length %q on a compressed body", route, cl)
 		}
-		if got := gunzip(t, zipped.Body.Bytes()); got != plain.Body.String() {
+		// Compare modulo the per-session Setup tokens /providers mints fresh on
+		// every render (the two requests here are two renders by construction).
+		if got := gunzip(t, zipped.Body.Bytes()); normalizeTokens(got) != normalizeTokens(plain.Body.String()) {
 			t.Errorf("%s: decompressed body differs from identity body", route)
 		}
 		if zipped.Body.Len() >= plain.Body.Len() {

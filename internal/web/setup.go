@@ -23,6 +23,7 @@ import (
 
 	"github.com/joestump/msgbrowse/internal/setup"
 	"github.com/joestump/msgbrowse/internal/source"
+	"github.com/joestump/msgbrowse/internal/store"
 )
 
 // Card states, rendered as text (never color alone — SPEC-0013 §Accessibility
@@ -83,6 +84,18 @@ type setupCard struct {
 	// progress swap, so the contradictory "Needs permission + ✓ Enabled" can't
 	// linger (issue #149).
 	SwapOOB bool
+	// Conversations / Messages are the source's imported footprint ("N
+	// conversations · N messages", issue #162), shown on an Enabled card.
+	// HasCounts distinguishes "zero imported" from "counts unavailable" (a
+	// store error degrades to the plain Imported note, never a fake 0).
+	Conversations int
+	Messages      int
+	HasCounts     bool
+	// ConfirmDisable renders the card's inline two-step Disable confirmation
+	// (issue #162): the first Disable POST re-renders the card in this state;
+	// only the confirmed second POST deletes anything. CSP-safe — a plain
+	// server-rendered affordance, no JS dialogs.
+	ConfirmDisable bool
 }
 
 // HasSettingsLink reports whether the card's guidance carries a System Settings
@@ -195,9 +208,10 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setupCards(ctx context.Context, token string) []setupCard {
 	det := s.detector()
 	present := s.sourcesPresent(ctx)
+	counts := s.sourceCounts(ctx)
 	cards := make([]setupCard, 0, len(source.All))
 	for _, src := range source.All {
-		cards = append(cards, s.setupCardFor(det, src, token, present))
+		cards = append(cards, s.setupCardFor(det, src, token, present, counts))
 	}
 	return cards
 }
@@ -210,8 +224,10 @@ func (s *Server) setupCards(ctx context.Context, token string) []setupCard {
 //
 // present is the set of sources with conversations in the store (store-presence);
 // it is the primary Enabled signal so a just-imported source reads Enabled even
-// while its live OS-permission probe would still report Needed.
-func (s *Server) setupCardFor(det setup.Detector, src, token string, present map[string]bool) setupCard {
+// while its live OS-permission probe would still report Needed. counts is the
+// per-source imported footprint (issue #162), shown on Enabled cards; a nil map
+// (store error) degrades to the plain Imported note.
+func (s *Server) setupCardFor(det setup.Detector, src, token string, present map[string]bool, counts map[string]store.SourceCount) setupCard {
 	card := setupCard{
 		Source:          src,
 		Label:           source.Label(src),
@@ -224,6 +240,11 @@ func (s *Server) setupCardFor(det setup.Detector, src, token string, present map
 		card.StateLabel = "Enabled"
 		card.Detail = "This source is enabled and its archive is imported."
 		card.Actionable = false
+		if c, ok := counts[src]; ok {
+			card.Conversations = c.Conversations
+			card.Messages = c.Messages
+			card.HasCounts = true
+		}
 		return card
 	}
 
@@ -305,17 +326,33 @@ func (s *Server) sourcesPresent(ctx context.Context) map[string]bool {
 	return present
 }
 
-// sourceConfigured reports whether a source already has a configured archive
-// root — the app-owned "Enabled" signal. It reads only the server's own captured
-// config values, never a request-derived path.
+// sourceCounts returns the per-source imported footprint for the Enabled cards
+// ("N conversations · N messages", issue #162). A store error is logged and
+// yields nil — the cards degrade to the plain Imported note, never a 500.
+func (s *Server) sourceCounts(ctx context.Context) map[string]store.SourceCount {
+	counts, err := s.store.SourceCounts(ctx)
+	if err != nil {
+		s.log.Warn("setup: could not read per-source counts from store", "error", err)
+		return nil
+	}
+	return counts
+}
+
+// sourceConfigured reports whether a source has an EXPLICITLY configured
+// archive root — the app-owned "Enabled" signal. It reads only the server's own
+// captured config values (cfgRoots), never a request-derived path, and
+// deliberately NOT the effective roots: the managed roots are provisioned as
+// empty directories on first desktop launch (SPEC-0013), so their mere
+// existence must not flip a card to Enabled (issue #160). On desktop the
+// store-presence signal (sourcesPresent) is what marks a source Enabled.
 func (s *Server) sourceConfigured(src string) bool {
 	switch src {
 	case source.Signal:
-		return s.roots.Signal != ""
+		return s.cfgRoots.Signal != ""
 	case source.IMessage:
-		return s.roots.IMessage != ""
+		return s.cfgRoots.IMessage != ""
 	case source.WhatsApp:
-		return s.roots.WhatsApp != ""
+		return s.cfgRoots.WhatsApp != ""
 	default:
 		return false
 	}

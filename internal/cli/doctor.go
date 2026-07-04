@@ -235,65 +235,71 @@ func checkDataDir(ctx context.Context, r *report, cfg *config.Config) *store.Sto
 	return st
 }
 
-// checkSignalArchive validates the signal archive_root. The classic mistake it
-// catches is pointing archive_root AT the export/ subdir instead of its parent.
+// checkSignalArchive validates the signal archive root — the EFFECTIVE one:
+// the configured archive_root when set, else the managed root a desktop
+// onboarding populated (<data_dir>/archives/signal, issue #160). The classic
+// mistake it catches is pointing archive_root AT the export/ subdir instead of
+// its parent.
 func checkSignalArchive(r *report, cfg *config.Config) {
-	if cfg.ArchiveRoot == "" {
+	root := setup.EffectiveRoot(cfg, source.Signal)
+	if root == "" {
 		r.add(statusWarn, "archive_root (Signal) is not set",
 			"set it to the folder that CONTAINS export/ if you want to import Signal; ignore if you only use iMessage")
 		return
 	}
-	info, err := os.Stat(cfg.ArchiveRoot)
+	info, err := os.Stat(root)
 	if err != nil {
-		r.add(statusFail, fmt.Sprintf("archive_root %q: %v", cfg.ArchiveRoot, err),
+		r.add(statusFail, fmt.Sprintf("archive_root %q: %v", root, err),
 			"check the path; it must be the read-only signal-export archive root")
 		return
 	}
 	if !info.IsDir() {
-		r.add(statusFail, fmt.Sprintf("archive_root %q is not a directory", cfg.ArchiveRoot), "")
+		r.add(statusFail, fmt.Sprintf("archive_root %q is not a directory", root), "")
 		return
 	}
-	switch classifyArchiveRoot(cfg.ArchiveRoot) {
+	switch classifyArchiveRoot(root) {
 	case archiveRootOK:
-		r.add(statusPass, fmt.Sprintf("Signal archive_root %q contains export/", cfg.ArchiveRoot), "")
+		r.add(statusPass, fmt.Sprintf("Signal archive_root %q contains export/", root), "")
 	case archiveRootPointsAtExport:
-		r.add(statusFail, fmt.Sprintf("archive_root %q points AT export/ (or its contents), not the archive root", cfg.ArchiveRoot),
+		r.add(statusFail, fmt.Sprintf("archive_root %q points AT export/ (or its contents), not the archive root", root),
 			"set archive_root to the PARENT folder — the one that CONTAINS export/, e.g. .../Signal-Archive not .../Signal-Archive/export")
 	default: // archiveRootNoExport
-		r.add(statusWarn, fmt.Sprintf("archive_root %q has no export/ subdirectory", cfg.ArchiveRoot),
+		r.add(statusWarn, fmt.Sprintf("archive_root %q has no export/ subdirectory", root),
 			"archive_root must contain an export/ folder of per-conversation directories; check you exported with signal-export")
 	}
 }
 
-// checkIMessageArchive validates the imessage_archive_root: it should be the
-// flat directory of <ChatName>.txt files.
+// checkIMessageArchive validates the effective iMessage archive root (the
+// configured imessage_archive_root, else the managed root — issue #160): it
+// should be the flat directory of <ChatName>.txt files.
 func checkIMessageArchive(r *report, cfg *config.Config) {
-	if cfg.IMessageArchiveRoot == "" {
+	root := setup.EffectiveRoot(cfg, source.IMessage)
+	if root == "" {
 		r.add(statusWarn, "imessage_archive_root is not set",
 			"set it to the imessage-exporter output directory if you want to import iMessage; ignore if you only use Signal")
 		return
 	}
-	info, err := os.Stat(cfg.IMessageArchiveRoot)
+	info, err := os.Stat(root)
 	if err != nil {
-		r.add(statusFail, fmt.Sprintf("imessage_archive_root %q: %v", cfg.IMessageArchiveRoot, err),
+		r.add(statusFail, fmt.Sprintf("imessage_archive_root %q: %v", root, err),
 			"check the path; it must be the imessage-exporter output directory")
 		return
 	}
 	if !info.IsDir() {
-		r.add(statusFail, fmt.Sprintf("imessage_archive_root %q is not a directory", cfg.IMessageArchiveRoot), "")
+		r.add(statusFail, fmt.Sprintf("imessage_archive_root %q is not a directory", root), "")
 		return
 	}
-	n, err := countTxtFiles(cfg.IMessageArchiveRoot)
+	n, err := countTxtFiles(root)
 	if err != nil {
-		r.add(statusWarn, fmt.Sprintf("could not scan imessage_archive_root %q: %v", cfg.IMessageArchiveRoot, err), "")
+		r.add(statusWarn, fmt.Sprintf("could not scan imessage_archive_root %q: %v", root, err), "")
 		return
 	}
 	if n == 0 {
-		r.add(statusWarn, fmt.Sprintf("imessage_archive_root %q has no *.txt files", cfg.IMessageArchiveRoot),
+		r.add(statusWarn, fmt.Sprintf("imessage_archive_root %q has no *.txt files", root),
 			"this should be the imessage-exporter output (a folder of <ChatName>.txt files); re-run with `-f txt` and point here")
 		return
 	}
-	r.add(statusPass, fmt.Sprintf("imessage_archive_root %q has %d *.txt file(s)", cfg.IMessageArchiveRoot, n), "")
+	r.add(statusPass, fmt.Sprintf("imessage_archive_root %q has %d *.txt file(s)", root, n), "")
 }
 
 // checkWhatsAppArchive validates the whatsapp_archive_root per SPEC-0009
@@ -304,7 +310,9 @@ func checkIMessageArchive(r *report, cfg *config.Config) {
 // the device type): iOS needs a local Finder/iTunes backup, Android the
 // backup plus its 64-digit key.
 func checkWhatsAppArchive(r *report, cfg *config.Config) {
-	root := cfg.WhatsAppArchiveRoot
+	// Effective root: the configured whatsapp_archive_root, else the managed
+	// root a desktop onboarding populated (issue #160).
+	root := setup.EffectiveRoot(cfg, source.WhatsApp)
 	if root == "" {
 		r.add(statusWarn, "whatsapp_archive_root is not set",
 			"set it to the WhatsApp-Chat-Exporter output directory (the folder containing result.json) if you want to import WhatsApp; ignore otherwise")

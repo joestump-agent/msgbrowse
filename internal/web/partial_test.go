@@ -6,12 +6,24 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/joestump/msgbrowse/internal/store"
 )
+
+// setupTokenRe matches the 256-bit per-session Setup tokens minted at render
+// time (setup_security.go): 64 lowercase hex chars. /providers embeds a fresh
+// token in its privileged-POST controls on EVERY render by design, so the
+// byte-stability and gzip-identity contracts are asserted modulo those token
+// bytes.
+var setupTokenRe = regexp.MustCompile(`[0-9a-f]{64}`)
+
+// normalizeTokens replaces per-render Setup tokens with a fixed placeholder so
+// two renders of the same page compare equal everywhere else.
+func normalizeTokens(s string) string { return setupTokenRe.ReplaceAllString(s, "TOKEN") }
 
 // countingStore wraps the real store and counts ListConversations calls, so
 // tests can prove the HTMX partial path never runs the sidebar listing
@@ -222,12 +234,13 @@ func TestSearchResultsFragmentUnchangedUnderHX(t *testing.T) {
 }
 
 // TestFullPageByteStable: identical plain requests produce identical bytes
-// (the design.md verification note for full renders).
+// (the design.md verification note for full renders), modulo the per-session
+// Setup tokens /providers mints fresh on every render by design.
 func TestFullPageByteStable(t *testing.T) {
 	srv, st, _ := newTestServer(t)
 	for _, route := range pageRoutes(t, st) {
-		a := get(t, srv, route).Body.String()
-		b := get(t, srv, route).Body.String()
+		a := normalizeTokens(get(t, srv, route).Body.String())
+		b := normalizeTokens(get(t, srv, route).Body.String())
 		if a != b {
 			t.Errorf("%s: two identical full requests differ", route)
 		}
