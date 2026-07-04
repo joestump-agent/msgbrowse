@@ -476,51 +476,8 @@ func TestDevicesPairImporterEndToEnd(t *testing.T) {
 	}
 }
 
-// TestStartDeviceSyncDisabled: the DEFAULT posture creates no socket at all —
-// the process's listening inventory stays exactly the loopback web UI
-// (SPEC-0011 "Default config exposes nothing new").
-func TestStartDeviceSyncDisabled(t *testing.T) {
-	cfg := testDeviceCfg(t, "node")
-	cfg.DeviceSync.Enabled = false
-	w, err := startDeviceSync(context.Background(), cfg, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w != nil {
-		t.Fatalf("startDeviceSync with sync disabled returned a worker bound to %s; want none", w.Addr)
-	}
-}
-
-// TestStartDeviceSyncEnabled: opting in binds the dedicated port; the worker
-// drains cleanly on context cancel (SPEC-0011 "Opt-in starts the listener" +
-// "Graceful shutdown mid-round").
-func TestStartDeviceSyncEnabled(t *testing.T) {
-	cfg := testDeviceCfg(t, "node")
-	st, err := openStore(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	w, err := startDeviceSync(ctx, cfg, st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w == nil {
-		t.Fatal("startDeviceSync with sync enabled returned no worker")
-	}
-
-	// The socket is really listening (TCP level; TLS would reject us, which
-	// is the point — unpinned certs never get past the handshake).
-	conn, err := net.DialTimeout("tcp", w.Addr, 2*time.Second)
-	if err != nil {
-		t.Fatalf("sync listener not accepting on %s: %v", w.Addr, err)
-	}
-	conn.Close()
-
-	cancel()
-	if err := w.Wait(); err != nil {
-		t.Errorf("worker exit = %v, want nil after graceful drain", err)
-	}
-}
+// NOTE: the startDeviceSync tests moved to serve_test.go when ADR-0021
+// swapped serve's device-sync path from the bespoke SPEC-0011 mTLS listener
+// to the supervised Syncthing engine. The supervised lifecycle itself
+// (start/stop/no-orphan/context-cancel/restart) is proven against a fake
+// Syncthing binary in internal/syncthing's suite.

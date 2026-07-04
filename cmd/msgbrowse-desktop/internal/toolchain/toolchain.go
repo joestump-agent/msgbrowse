@@ -17,6 +17,8 @@
 //	        venv/bin/sigexport                <- signal-export console script
 //	        venv/bin/wtsexporter              <- whatsapp-chat-exporter console script
 //	        imessage-exporter                 <- native macOS binary
+//	        syncthing                         <- device-sync engine (ADR-0021)
+//	        syncthing.version                 <- its build-time version pin
 //
 // The package is pure Go (no cgo, no Wails import, no `desktop` build tag) so it
 // is exercised by the desktop module's `CGO_ENABLED=0 go test ./...` on headless
@@ -56,6 +58,12 @@ const (
 	WhatsApp
 	// IMessage is the native imessage-exporter macOS binary.
 	IMessage
+	// Syncthing is the native device-sync transfer engine (ADR-0021): a
+	// version-pinned upstream Syncthing binary the supervisor
+	// (internal/syncthing) runs as a managed child. Like the exporters it is
+	// resolved from the bundle and NEVER from $PATH (SPEC-0014 REQ "Bundled
+	// Syncthing Runtime").
+	Syncthing
 )
 
 // spec describes where a tool lives under the bundled tools dir and how to ask
@@ -84,10 +92,11 @@ type spec struct {
 // (exit 0), and capture a human-readable identifier for the About view. A tool
 // whose probe exits non-zero is reported as a bundled-tool error.
 var specs = map[Tool]spec{
-	Python:   {name: "python", relPath: filepath.Join("python", "bin", "python3"), versionArgs: []string{"-V"}},
-	Signal:   {name: "sigexport", relPath: filepath.Join("venv", "bin", "sigexport"), versionArgs: []string{"--version"}},
-	WhatsApp: {name: "wtsexporter", relPath: filepath.Join("venv", "bin", "wtsexporter"), versionArgs: []string{"--help"}},
-	IMessage: {name: "imessage-exporter", relPath: "imessage-exporter", versionArgs: []string{"--version"}},
+	Python:    {name: "python", relPath: filepath.Join("python", "bin", "python3"), versionArgs: []string{"-V"}},
+	Signal:    {name: "sigexport", relPath: filepath.Join("venv", "bin", "sigexport"), versionArgs: []string{"--version"}},
+	WhatsApp:  {name: "wtsexporter", relPath: filepath.Join("venv", "bin", "wtsexporter"), versionArgs: []string{"--help"}},
+	IMessage:  {name: "imessage-exporter", relPath: "imessage-exporter", versionArgs: []string{"--version"}},
+	Syncthing: {name: "syncthing", relPath: "syncthing", versionArgs: []string{"--version"}},
 }
 
 // toolsSubdir is the directory under Contents/Resources that holds the bundled
@@ -188,9 +197,39 @@ var pythonScripts = map[Tool]bool{Signal: true, WhatsApp: true}
 // SignalPath returns the bundled sigexport path, or ErrNotBundled-style errors
 // bubbled from Path. Convenience wrappers keep call sites at the desktop export
 // path readable and typed.
-func (r *Resolver) SignalPath() (string, error)   { return r.Path(Signal) }
-func (r *Resolver) IMessagePath() (string, error) { return r.Path(IMessage) }
-func (r *Resolver) WhatsAppPath() (string, error) { return r.Path(WhatsApp) }
+func (r *Resolver) SignalPath() (string, error)    { return r.Path(Signal) }
+func (r *Resolver) IMessagePath() (string, error)  { return r.Path(IMessage) }
+func (r *Resolver) WhatsAppPath() (string, error)  { return r.Path(WhatsApp) }
+func (r *Resolver) SyncthingPath() (string, error) { return r.Path(Syncthing) }
+
+// syncthingVersionFile is the build-time version pin desktop.yml writes next
+// to the bundled Syncthing binary (tools/syncthing.version). The runtime
+// supervisor verifies `syncthing --version` reports this exact pinned version
+// before launching the daemon — the "expected hash/version recorded at build
+// time and verified before first launch" half of SPEC-0014 REQ "Bundled
+// Syncthing Runtime" (the CI download itself is sha256-pinned in desktop.yml;
+// binary bytes are additionally sealed by codesign once real signing lands).
+const syncthingVersionFile = "syncthing.version"
+
+// SyncthingVersionPin reads the build-time Syncthing version pin from the
+// bundle (e.g. "v2.1.1"). In a real .app the file always exists — desktop.yml
+// writes it beside the binary — so a missing or empty pin is a bundle
+// integrity error, surfaced as a typed *ToolError rather than skipping the
+// version check (SPEC-0014 "Tampered bundled binary refuses to launch").
+func (r *Resolver) SyncthingVersionPin() (string, error) {
+	path := filepath.Join(r.toolsDir, syncthingVersionFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", &ToolError{Tool: Syncthing, Name: Name(Syncthing), Path: path,
+			Err: fmt.Errorf("read version pin: %w", err)}
+	}
+	pin := strings.TrimSpace(string(b))
+	if pin == "" {
+		return "", &ToolError{Tool: Syncthing, Name: Name(Syncthing), Path: path,
+			Err: errors.New("version pin file is empty")}
+	}
+	return pin, nil
+}
 
 // Runner runs a tool binary with args and returns combined stdout+stderr. It is
 // the seam that makes VerifyTool testable without the real macOS binaries: tests
@@ -301,8 +340,11 @@ func (r *Resolver) VerifyTool(ctx context.Context, t Tool, run Runner) (ToolInfo
 
 // AllTools is the fixed set of bundled tools, in a stable order for iteration
 // (Python first — the runtime the venv scripts depend on — then the three
-// exporters). Verify and the About view walk this slice.
-var AllTools = []Tool{Python, Signal, WhatsApp, IMessage}
+// exporters, then the Syncthing sync engine per ADR-0021). Verify, the About
+// view, and the CI relocation-regression probe (internal/toolchain/probe,
+// issue #147) walk this slice — adding Syncthing here is what puts the
+// bundled sync engine under the moved-.app `--version` guard in desktop.yml.
+var AllTools = []Tool{Python, Signal, WhatsApp, IMessage, Syncthing}
 
 // Verify runs VerifyTool over every bundled tool and returns the collected
 // ToolInfo for those that verified plus the *ToolError list for those that did
@@ -518,9 +560,15 @@ func ResolveExporters(ctx context.Context, execPath string, run Runner) (Exporte
 
 	// Bundled: verify integrity before handing back paths. A broken bundle is a
 	// hard, typed error — we never degrade to $PATH here (that would defeat the
-	// offline, pinned-version guarantee and could run an unexpected tool).
-	if _, errs := r.Verify(ctx, run); len(errs) > 0 {
-		return ExporterPaths{}, errs[0]
+	// offline, pinned-version guarantee and could run an unexpected tool). Only
+	// the EXPORTER tools are verified: the bundled Syncthing engine has its own
+	// resolution seam and supervisor-side probe, and a broken sync engine must
+	// never block an export (the same decoupling issue #147 established between
+	// sources).
+	for _, t := range []Tool{Python, Signal, WhatsApp, IMessage} {
+		if _, err := r.VerifyTool(ctx, t, run); err != nil {
+			return ExporterPaths{}, err
+		}
 	}
 
 	sig, err := r.SignalPath()

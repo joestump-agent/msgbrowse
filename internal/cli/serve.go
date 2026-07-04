@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"syscall"
 
 	"github.com/joestump/msgbrowse/internal/config"
-	"github.com/joestump/msgbrowse/internal/devices"
-	"github.com/joestump/msgbrowse/internal/devices/listener"
 	"github.com/joestump/msgbrowse/internal/ingest"
 	"github.com/joestump/msgbrowse/internal/onboardsvc"
 	"github.com/joestump/msgbrowse/internal/store"
+	"github.com/joestump/msgbrowse/internal/syncthing"
 	"github.com/joestump/msgbrowse/internal/web"
 	"github.com/spf13/cobra"
 )
@@ -71,9 +71,10 @@ func newServeCommand() *cobra.Command {
 			defer onboardRunner.Shutdown()
 			srv.SetEnabler(onboardRunner)
 
-			// Device sync (ADR-0018): with device_sync.enabled the sync
-			// listener runs beside the web UI as a context-managed worker;
-			// disabled (the default) means no second socket exists at all.
+			// Device sync (ADR-0021): with device_sync.enabled the
+			// supervised Syncthing engine runs beside the web UI as a
+			// context-managed worker; disabled (the default) means no
+			// Syncthing process and no P2P listener exist at all.
 			devSync, err := startDeviceSync(ctx, cfg, st)
 			if err != nil {
 				return err
@@ -134,68 +135,97 @@ func resolveListenAddr(cmd *cobra.Command, configured string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
-// deviceSyncWorker is a running device-sync listener started by
-// startDeviceSync: its bound address and a Wait that blocks until the
-// listener has fully drained.
+// deviceSyncWorker is the running device-sync engine started by
+// startDeviceSync: the supervised Syncthing daemon's loopback REST address
+// and a Wait that blocks until the supervisor has fully drained (child
+// stopped, no orphan).
 type deviceSyncWorker struct {
-	// Addr is the bound host:port (useful when the config asked for :0).
+	// Addr is the daemon's loopback REST API address (host:port).
 	Addr string
 	done <-chan error
 }
 
-// Wait blocks until the listener worker exits and returns its error.
+// Wait blocks until the supervision worker exits and returns its error.
 func (w *deviceSyncWorker) Wait() error { return <-w.done }
 
-// startDeviceSync starts the device-sync listener as a context-managed
+// startDeviceSync starts the supervised Syncthing engine as a context-managed
 // worker when device_sync.enabled is true. With device sync disabled — the
-// default — it returns (nil, nil) and creates NO socket, keeping the
-// process's socket inventory exactly the loopback web UI (SPEC-0011
-// "Default config exposes nothing new").
+// default — it returns (nil, nil) and starts NO process and NO socket,
+// keeping the process's socket inventory exactly the loopback web UI
+// (SPEC-0014 "Device sync disabled means no Syncthing process").
 //
-// The serve-embedded listener starts with NO pairing window: pairing windows
-// are opened by `msgbrowse devices pair` today (the settings-page flow rides
-// the SPEC-0010 story), so every unpinned certificate is rejected at the TLS
-// layer for the whole life of this listener.
-func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store) (*deviceSyncWorker, error) {
+// This replaces the bespoke SPEC-0011 mTLS listener that used to start here:
+// ADR-0021 supersedes ADR-0018, so the ACTIVE device-sync path is now the
+// bundled/BYO Syncthing supervisor. The retired internal/devices listener
+// code is still in the tree for the `msgbrowse devices` CLI surface and is
+// removed wholesale by the migration story (#158) — it is no longer reachable
+// from serve.
+//
+// Binary resolution here is the bring-your-own path (config key, then $PATH),
+// mirroring the exporters: only the desktop .app bundles a pinned binary
+// (SPEC-0014 REQ "Bundled Syncthing Runtime"; resolution in
+// cmd/msgbrowse-desktop). It starts eagerly and fails fast: the operator
+// explicitly enabled sync, so a missing engine or a failed start aborts
+// serve rather than degrading silently (SPEC-0014 REQ "Error Handling
+// Standards").
+//
+// The store handle is unused today; the pairing story (#157/#158) feeds
+// paired peers from the repurposed paired_devices table into the generated
+// config.
+//
+// Governing: ADR-0021, SPEC-0014 REQ "Supervised Daemon Lifecycle".
+func startDeviceSync(ctx context.Context, cfg *config.Config, _ *store.Store) (*deviceSyncWorker, error) {
 	if !cfg.DeviceSync.Enabled {
 		return nil, nil
 	}
-	name := deviceName(cfg)
-	id, created, err := devices.LoadOrCreateIdentity(devices.IdentityDir(cfg.DataDir), name)
+	bin, err := resolveSyncthingBin(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if created {
-		slog.Info("generated device-sync identity", "fingerprint", id.Fingerprint())
-	}
-	logger := newCharmLogger(cfg.LogLevel)
-	l := &listener.Listener{
-		Identity: id,
-		Importer: &devices.Importer{
-			DeviceName: name,
-			Sources:    importedSources(cfg),
-			Store:      st,
-			Logger:     logger,
-		},
-		Registry: storeRegistry{st},
-		Addr:     cfg.DeviceSync.ListenAddr,
-		Logger:   logger,
-	}
-	// Bind eagerly and fail fast: the operator explicitly enabled the
-	// listener, so a port conflict should abort serve, not degrade silently.
-	ln, err := l.Listen(ctx)
+	folders, err := syncthing.ExistingManagedFolders(cfg.DataDir)
 	if err != nil {
+		return nil, fmt.Errorf("device sync start failed: %w", err)
+	}
+	sup, err := syncthing.New(syncthing.Options{
+		BinPath:    bin,
+		DataDir:    cfg.DataDir,
+		ListenAddr: cfg.DeviceSync.ListenAddr,
+		DeviceName: deviceName(cfg),
+		Folders:    folders,
+		Logger:     slog.Default(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := sup.Start(ctx); err != nil {
 		return nil, err
 	}
 	done := make(chan error, 1)
 	go func() {
-		err := l.Serve(ctx, ln)
+		err := sup.Wait()
 		if err != nil && ctx.Err() == nil {
-			slog.Error("device-sync listener failed", "error", err)
+			slog.Error("device-sync supervisor failed", "error", err)
 		}
 		done <- err
 	}()
-	return &deviceSyncWorker{Addr: ln.Addr().String(), done: done}, nil
+	return &deviceSyncWorker{Addr: sup.APIAddr(), done: done}, nil
+}
+
+// resolveSyncthingBin resolves the Syncthing binary for `serve`'s
+// bring-your-own path: the device_sync.syncthing_bin config key when set,
+// otherwise a $PATH lookup of `syncthing` — exactly the resolution shape the
+// exporter *_bin keys use. A miss is the typed ErrBinaryNotFound with
+// guidance, never a silent no-op.
+func resolveSyncthingBin(cfg *config.Config) (string, error) {
+	if bin := cfg.DeviceSync.SyncthingBin; bin != "" {
+		return bin, nil
+	}
+	bin, err := exec.LookPath("syncthing")
+	if err != nil {
+		return "", fmt.Errorf("device sync start failed: %w: install syncthing or set device_sync.syncthing_bin (the desktop app bundles its own copy)",
+			syncthing.ErrBinaryNotFound)
+	}
+	return bin, nil
 }
 
 // ingestOnStart runs a best-effort ingest pass before serving, when configured

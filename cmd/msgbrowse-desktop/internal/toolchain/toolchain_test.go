@@ -259,19 +259,20 @@ func TestVerifyCollectsInfosAndErrors(t *testing.T) {
 		return []byte(filepath.Base(name) + " 1.0.0"), nil
 	}
 	infos, errs := r.Verify(context.Background(), run)
-	if len(infos) != 2 {
-		t.Fatalf("got %d infos, want 2 (python, imessage-exporter)", len(infos))
+	if len(infos) != 3 {
+		t.Fatalf("got %d infos, want 3 (python, imessage-exporter, syncthing)", len(infos))
 	}
 	if len(errs) != 2 {
 		t.Fatalf("got %d errs, want 2 (sigexport, wtsexporter)", len(errs))
 	}
-	// Survivors are Python and IMessage; failures are Signal and WhatsApp.
+	// Survivors are Python, IMessage, and Syncthing; failures are Signal and
+	// WhatsApp.
 	gotOK := map[Tool]bool{}
 	for _, in := range infos {
 		gotOK[in.Tool] = true
 	}
-	if !gotOK[Python] || !gotOK[IMessage] {
-		t.Errorf("survivors = %v, want python+imessage", gotOK)
+	if !gotOK[Python] || !gotOK[IMessage] || !gotOK[Syncthing] {
+		t.Errorf("survivors = %v, want python+imessage+syncthing", gotOK)
 	}
 	gotErr := map[Tool]bool{}
 	for _, e := range errs {
@@ -619,5 +620,74 @@ func TestResolveExporterNotBundled(t *testing.T) {
 	}
 	if res.Bundled || res.Path != "" || res.Env != nil {
 		t.Errorf("non-bundled ResolveExporter = %+v; want Bundled=false, empty path, nil env", res)
+	}
+}
+
+// --- Bundled Syncthing (ADR-0021 / SPEC-0014) --------------------------------
+
+// TestSyncthingPathAndVersionPin: the bundled sync engine resolves like every
+// other tool (tools/syncthing), and its build-time version pin
+// (tools/syncthing.version, written by desktop.yml) reads back trimmed. A
+// missing or empty pin is a typed *ToolError — the runtime supervisor must
+// refuse to launch without the pin, never skip the version check (SPEC-0014
+// "Tampered bundled binary refuses to launch").
+func TestSyncthingPathAndVersionPin(t *testing.T) {
+	toolsDir := fakeBundle(t)
+	r := NewResolver(toolsDir)
+
+	got, err := r.SyncthingPath()
+	want := filepath.Join(toolsDir, "syncthing")
+	if err != nil || got != want {
+		t.Fatalf("SyncthingPath = (%q, %v), want (%q, nil)", got, err, want)
+	}
+
+	// Missing pin file: typed error.
+	if _, err := r.SyncthingVersionPin(); err == nil {
+		t.Fatal("SyncthingVersionPin with no pin file: want a *ToolError, got nil")
+	} else {
+		var te *ToolError
+		if !errors.As(err, &te) || te.Tool != Syncthing {
+			t.Fatalf("SyncthingVersionPin err = %v (%T), want *ToolError for syncthing", err, err)
+		}
+	}
+
+	// Empty pin file: typed error too.
+	pinPath := filepath.Join(toolsDir, "syncthing.version")
+	if err := os.WriteFile(pinPath, []byte("  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.SyncthingVersionPin(); err == nil {
+		t.Fatal("SyncthingVersionPin with empty pin file: want error, got nil")
+	}
+
+	// Real pin reads back trimmed.
+	if err := os.WriteFile(pinPath, []byte("v2.1.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pin, err := r.SyncthingVersionPin()
+	if err != nil || pin != "v2.1.1" {
+		t.Fatalf("SyncthingVersionPin = (%q, %v), want (v2.1.1, nil)", pin, err)
+	}
+}
+
+// TestResolveExportersIgnoresBrokenSyncthing: a corrupt bundled sync engine
+// must never block exporter resolution — the decoupling issue #147
+// established between sources extends to the sync engine (its integrity is
+// checked by the supervisor at device-sync start, not at export time).
+func TestResolveExportersIgnoresBrokenSyncthing(t *testing.T) {
+	exe := fakeBundleApp(t)
+	toolsDir := filepath.Join(filepath.Dir(filepath.Dir(exe)), "Resources", "tools")
+	if err := os.Remove(filepath.Join(toolsDir, specs[Syncthing].relPath)); err != nil {
+		t.Fatalf("remove syncthing stub: %v", err)
+	}
+	run := func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		return []byte(filepath.Base(name) + " 1.0.0"), nil
+	}
+	got, err := ResolveExporters(context.Background(), exe, run)
+	if err != nil {
+		t.Fatalf("ResolveExporters with broken syncthing: %v (exporters must not couple to the sync engine)", err)
+	}
+	if !got.Bundled {
+		t.Error("Bundled = false, want true")
 	}
 }

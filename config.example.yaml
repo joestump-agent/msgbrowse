@@ -59,17 +59,24 @@ journal:
   # 0 = no cap on days processed per run.
   max_days_per_run: 0
 
-# Multi-device archive sync (ADR-0018 / SPEC-0011). STRICTLY OPT-IN: with
-# enabled false (or the block absent) no sync listener exists and msgbrowse
-# keeps its loopback-only posture. The sync listener is the one socket that
-# accepts connections beyond loopback — authenticated by mutual TLS on
-# certificates pinned at QR pairing, never by loopback trust.
+# Multi-device archive sync (ADR-0021 / SPEC-0014). STRICTLY OPT-IN: with
+# enabled false (or the block absent) no Syncthing process runs and msgbrowse
+# keeps its loopback-only posture. When enabled, msgbrowse supervises a
+# bundled/BYO Syncthing as the transfer engine: its P2P listener is the one
+# socket beyond loopback — mutual TLS with device-ID pinning, both ends must
+# accept a peer — and its config is generated LAN-only by default (global
+# discovery OFF, relaying OFF; nothing leaves the LAN).
 device_sync:
   enabled: false
-  # Sync listener bind (host:port). Dedicated port, distinct from listen_addr.
+  # Syncthing P2P sync listener bind (host:port). Dedicated port, distinct
+  # from listen_addr; Syncthing's loopback REST API picks its own port.
   listen_addr: ":8788"
   # This node's name as shown on paired peers. Empty = derive from hostname.
   device_name: ""
+  # Path to the Syncthing binary for `msgbrowse serve` (bring-your-own,
+  # like the exporter *_bin keys). Empty = look `syncthing` up on PATH.
+  # The desktop .app ignores this and always runs its bundled, pinned copy.
+  syncthing_bin: ""
   # Replica manifest polling fallback interval (notifications are advisory).
   poll_interval: "15m"
   # Staging area for fetched files before verification + atomic adoption.

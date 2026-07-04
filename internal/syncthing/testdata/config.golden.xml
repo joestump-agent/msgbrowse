@@ -1,0 +1,25 @@
+<configuration version="37">
+    <folder id="msgbrowse-signal" label="msgbrowse Signal archive" path="/data/archives/signal" type="sendreceive" rescanIntervalS="3600" fsWatcherEnabled="true" fsWatcherDelayS="10"></folder>
+    <folder id="msgbrowse-imessage" label="msgbrowse iMessage archive" path="/data/archives/imessage" type="sendreceive" rescanIntervalS="3600" fsWatcherEnabled="true" fsWatcherDelayS="10">
+        <device id="PEER111-AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG"></device>
+    </folder>
+    <device id="PEER111-AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG" name="kitchen-server">
+        <address>dynamic</address>
+    </device>
+    <gui enabled="true" tls="false">
+        <address>127.0.0.1:28384</address>
+        <apikey>0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef</apikey>
+    </gui>
+    <options>
+        <listenAddress>tcp://:8788</listenAddress>
+        <globalAnnounceEnabled>false</globalAnnounceEnabled>
+        <localAnnounceEnabled>true</localAnnounceEnabled>
+        <relaysEnabled>false</relaysEnabled>
+        <natEnabled>false</natEnabled>
+        <urAccepted>-1</urAccepted>
+        <urSeen>3</urSeen>
+        <crashReportingEnabled>false</crashReportingEnabled>
+        <autoUpgradeIntervalH>0</autoUpgradeIntervalH>
+        <startBrowser>false</startBrowser>
+    </options>
+</configuration>

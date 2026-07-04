@@ -15,6 +15,12 @@
 # (cmd/msgbrowse-desktop/internal/toolchain) reads these bundled paths at runtime,
 # never $PATH.
 #
+# Bundled Syncthing (ADR-0021, SPEC-0014): the device-sync transfer engine joins
+# the toolchain under Contents/Resources/tools — version-pinned, download
+# sha256-checked, its pin recorded in tools/syncthing.version for the runtime
+# supervisor's pre-launch verification — and rides the same ad-hoc/gated signing
+# and the same relocation-regression probe as the exporters.
+#
 # RELOCATION REGRESSION GUARD (issue #147): verifying the tools IN PLACE on the
 # runner is NOT enough — python-build-standalone bakes a compile-time `/install`
 # base prefix, so after the .app moves to /Applications the bundled interpreter
@@ -93,6 +99,19 @@ env:
   WHATSAPP_EXPORT_SPEC: "whatsapp-chat-exporter[all]==0.13.0"
   # imessage-exporter (ReagentX) native macOS binary release.
   IMESSAGE_EXPORTER_VERSION: "4.2.0"
+
+  # --- Bundled Syncthing sync engine (ADR-0021 / SPEC-0014) -------------------
+  # Syncthing is the device-sync transfer engine, bundled and supervised like
+  # the exporters (never $PATH). The official macOS release ships a universal
+  # (arm64+x86_64) binary, so unlike Python no per-arch pick is needed. The
+  # version is pinned AND the release zip's sha256 is pinned, so the build is
+  # reproducible and a tampered download fails loudly (SPEC-0014 REQ "Bundled
+  # Syncthing Runtime": expected hash recorded at build time). The version is
+  # also written into the bundle (tools/syncthing.version) so the runtime
+  # supervisor verifies `syncthing --version` reports exactly this pin before
+  # launching the daemon. Bump both values together, deliberately.
+  SYNCTHING_VERSION: "2.1.1"
+  SYNCTHING_SHA256: "72f17a0447ad5f3bc3dee7a98655b6e2892a7d39b7e4bcc225ee699543714ffd"
 
 jobs:
   darwin:
@@ -235,6 +254,30 @@ jobs:
           curl -fL --retry 3 -o "$TOOLS/imessage-exporter" "$URL"
           chmod +x "$TOOLS/imessage-exporter"
 
+      # --- Bundle Syncthing (ADR-0021 / SPEC-0014) ------------------------------
+      # The device-sync transfer engine, pinned by version AND by the release
+      # zip's sha256 (a tampered or truncated download fails the build here,
+      # never ships). The official macOS zip is universal (arm64+x86_64), so
+      # the .app carries one binary for both arches. tools/syncthing.version
+      # records the pin INSIDE the bundle (before signing, so it is sealed by
+      # the app signature once real signing lands); the runtime supervisor
+      # (internal/syncthing.VerifyBinary) refuses to launch a binary whose
+      # --version does not report this exact pin.
+      - name: Bundle Syncthing (pinned + integrity-checked)
+        run: |
+          set -euo pipefail
+          TOOLS="build/bin/msgbrowse.app/Contents/Resources/tools"
+          ZIPNAME="syncthing-macos-universal-v${SYNCTHING_VERSION}.zip"
+          URL="https://github.com/syncthing/syncthing/releases/download/v${SYNCTHING_VERSION}/${ZIPNAME}"
+          echo "Downloading $URL"
+          curl -fL --retry 3 -o /tmp/syncthing.zip "$URL"
+          echo "${SYNCTHING_SHA256}  /tmp/syncthing.zip" | shasum -a 256 -c -
+          # The zip wraps the binary in a versioned directory; extract just
+          # the syncthing binary flat into tools/ (-j junks the path).
+          unzip -j -o /tmp/syncthing.zip "syncthing-macos-universal-v${SYNCTHING_VERSION}/syncthing" -d "$TOOLS"
+          chmod +x "$TOOLS/syncthing"
+          printf 'v%s\n' "${SYNCTHING_VERSION}" > "$TOOLS/syncthing.version"
+
       # In-CI proof the bundled tools actually run on the runner (SPEC-0013 REQ
       # "Bundled tool integrity and version check"). This is the check the story
       # gates on: the versions printed here are reported in the PR body.
@@ -258,6 +301,11 @@ jobs:
           "$TOOLS/venv/bin/wtsexporter" --help | head -n1
           echo "== imessage-exporter =="
           "$TOOLS/imessage-exporter" --version
+          echo "== syncthing (ADR-0021) =="
+          "$TOOLS/syncthing" --version
+          # The reported version must match the pin recorded in the bundle —
+          # the same check the runtime supervisor enforces before launch.
+          "$TOOLS/syncthing" --version | grep -F "$(cat "$TOOLS/syncthing.version")"
 
       # --- RELOCATION REGRESSION GUARD (issue #147) ----------------------------
       # Reproduce the /Applications move: copy the built .app to a DIFFERENT
@@ -303,10 +351,18 @@ jobs:
           # hands it the inherited environment, not the Python one).
           echo "== relocated imessage-exporter --version (no python env) =="
           env -u PYTHONHOME -u PYTHONPATH "$TOOLS/imessage-exporter" --version
+          # syncthing is a native Go binary (ADR-0021) — same deal: no Python
+          # env, must run and report the pinned version from the MOVED .app
+          # (issue #147 pattern: probing in place is not enough).
+          echo "== relocated syncthing --version (no python env) =="
+          env -u PYTHONHOME -u PYTHONPATH "$TOOLS/syncthing" --version
+          env -u PYTHONHOME -u PYTHONPATH "$TOOLS/syncthing" --version | grep -F "$(cat "$TOOLS/syncthing.version")"
 
           # 2) Authoritative probe THROUGH the shipped Go resolver: this is the
           #    real regression guard — it uses the exact VerifyTool + env code the
-          #    app runs, so CI and production agree by construction.
+          #    app runs, so CI and production agree by construction. AllTools
+          #    includes the bundled Syncthing engine, so the sync engine rides
+          #    the same moved-.app guard as the exporters.
           echo "== Go resolver relocation probe =="
           go run ./internal/toolchain/probe "$RELOC"
 
@@ -330,9 +386,10 @@ jobs:
               codesign --force -s - --timestamp=none "$f" || true
             fi
           done
-          # The imessage-exporter binary is Mach-O; ensure it is signed even if
-          # `file` heuristics missed it.
+          # The imessage-exporter and syncthing binaries are Mach-O; ensure
+          # they are signed even if `file` heuristics missed them.
           codesign --force -s - --timestamp=none "$TOOLS/imessage-exporter" || true
+          codesign --force -s - --timestamp=none "$TOOLS/syncthing" || true
           # Sign the app bundle itself (deep) last.
           codesign --force --deep -s - "$APP" || true
           echo "Ad-hoc signature verification (informational):"

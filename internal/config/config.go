@@ -110,6 +110,16 @@ type DeviceSyncConfig struct {
 	// and atomic adoption. Empty means "derive a sibling of the archive root
 	// on the same filesystem" at sync time.
 	StagingDir string `mapstructure:"staging_dir"`
+
+	// SyncthingBin is an optional explicit path to the Syncthing binary the
+	// supervisor runs (ADR-0021: Syncthing is the device-sync transfer
+	// engine). Empty (the default) means "look `syncthing` up on $PATH" —
+	// the bring-your-own fallback for `msgbrowse serve`, mirroring the
+	// exporter *_bin keys above. The desktop .app ignores this key and
+	// always resolves its bundled, version-pinned binary from
+	// Contents/Resources (never $PATH), per SPEC-0014 REQ "Bundled
+	// Syncthing Runtime".
+	SyncthingBin string `mapstructure:"syncthing_bin"`
 }
 
 // LLMConfig configures the OpenAI-compatible client. BaseURL is the only network
@@ -197,6 +207,10 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("device_sync.device_name", "")
 	v.SetDefault("device_sync.poll_interval", 15*time.Minute)
 	v.SetDefault("device_sync.staging_dir", "")
+	// Optional override for the Syncthing binary the device-sync supervisor
+	// runs (ADR-0021). Empty means "look `syncthing` up on PATH" for the
+	// bring-your-own CLI path; the desktop .app always uses its bundled copy.
+	v.SetDefault("device_sync.syncthing_bin", "")
 }
 
 // Load constructs a *viper.Viper wired for msgbrowse: defaults, optional config
