@@ -71,6 +71,12 @@ func RESTInfo(dataDir string) (addr, key string, err error) {
 	if addr == "" || key == "" {
 		return "", "", fmt.Errorf("%w: empty REST address or API key under %s", ErrNotRunning, homeDir)
 	}
+	// Defense-in-depth (adversarial-review fix on #172): only the supervisor
+	// writes this file, post-validation — but re-validate on the read path so
+	// a tampered file can never send a CLI/doctor probe beyond loopback.
+	if err := requireLoopback(addr); err != nil {
+		return "", "", fmt.Errorf("recorded REST address %q is not loopback: %w", addr, err)
+	}
 	return addr, key, nil
 }
 

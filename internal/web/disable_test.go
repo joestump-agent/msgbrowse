@@ -207,3 +207,26 @@ func TestEnabledCardShowsCountsAndControls(t *testing.T) {
 		t.Errorf("/providers footer missing the all-enabled copy")
 	}
 }
+
+// TestDisableRefusedOnSyncedSource mirrors the Enable/Refresh conflict guard:
+// a synced-in (replica) source must not be disable-able — a stale page could
+// otherwise delete a replica's imported rows with no UI path to re-import
+// until the next sync completion (adversarial-review fix on #172).
+func TestDisableRefusedOnSyncedSource(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.SetSyncMonitor(replicaMonitor())
+	before := signalConvCount(t, srv)
+
+	tok := mintToken(t, srv)
+	rec := disablePOST(t, srv, selfOrigin, tok, "signal", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable-on-replica = %d, want 200 conflict fragment", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "kitchen-mac") {
+		t.Errorf("conflict fragment should name the importer; got: %.200s", body)
+	}
+	if got := signalConvCount(t, srv); got != before {
+		t.Fatalf("replica rows deleted despite the conflict guard: %d -> %d", before, got)
+	}
+}

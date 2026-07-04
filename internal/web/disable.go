@@ -45,6 +45,15 @@ func (s *Server) handleSetupDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Synced-in (replica) sources cannot be disabled here: the guard that
+	// protects Enable/Refresh applies equally, or a stale page could delete a
+	// replica's imported rows with no UI path to force re-import until the
+	// next sync completion (adversarial-review fix on #172). Unpair the
+	// importing device instead — the conflict fragment names it.
+	if s.renderImporterConflict(w, r, src) {
+		return
+	}
+
 	ctx := r.Context()
 	token, err := s.setupTokens.mint()
 	if err != nil {
