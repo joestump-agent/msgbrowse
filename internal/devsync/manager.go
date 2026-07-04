@@ -15,8 +15,20 @@
 // the Watcher then resolves only for registry members. Knowledge of a device
 // ID alone never grants sync.
 //
+// Replica provisioning (SPEC-0014 REQ "Importer and Replica Roles"): a fresh
+// replica has NO local managed roots, yet pairing it with an importer must
+// end with the importer's archives syncing to it. So Pair treats the
+// payload's folders[] as an introduction to honor, not a set to intersect
+// with: every introduced folder id that maps onto the fixed source enum is
+// PROVISIONED locally (<data_dir>/archives/<source> created via
+// setup.ManagedRoot, archive-not-DB guard re-asserted), added to the daemon's
+// live folder config, and shared with the peer. Ids outside the enum are
+// logged and ignored — a peer selects from the deterministic managed layout,
+// it never names a folder into existence.
+//
 // Governing: ADR-0021 ("pairing is a device-ID QR"), SPEC-0014 REQ "Pairing
-// via Device ID and QR", §Trust Model, REQ "Error Handling Standards".
+// via Device ID and QR", REQ "Importer and Replica Roles", §Trust Model, REQ
+// "Error Handling Standards".
 package devsync
 
 import (
@@ -36,7 +48,7 @@ type Manager struct {
 	api     API
 	st      PeerStore
 	name    string
-	folders []syncthing.Folder
+	folders *FolderSet
 	log     *slog.Logger
 
 	mu   sync.Mutex
@@ -44,9 +56,10 @@ type Manager struct {
 }
 
 // NewManager builds a Manager over a running daemon's REST API. name is this
-// node's friendly device name; folders are the locally managed archive
-// folders (the shareable set).
-func NewManager(api API, st PeerStore, name string, folders []syncthing.Folder, log *slog.Logger) *Manager {
+// node's friendly device name; folders is the LIVE managed-folder set —
+// shared with the Watcher so a folder Pair provisions is immediately watched
+// for re-ingest (never nil).
+func NewManager(api API, st PeerStore, name string, folders *FolderSet, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -77,13 +90,9 @@ func (m *Manager) deviceID(ctx context.Context) (string, error) {
 	return id, nil
 }
 
-// folderIDs returns the locally managed folder ids in declaration order.
+// folderIDs returns the locally managed folder ids in registration order.
 func (m *Manager) folderIDs() []string {
-	ids := make([]string, 0, len(m.folders))
-	for _, f := range m.folders {
-		ids = append(ids, f.ID)
-	}
-	return ids
+	return m.folders.IDs()
 }
 
 // ActivePairing implements web.PairingSource: the payload the /settings QR
@@ -110,16 +119,29 @@ func (m *Manager) ActivePairing(ctx context.Context) (*devices.SyncPayload, bool
 
 // Pair executes the operator's explicit accept action for the OTHER node's
 // pairing code: decode/validate the payload (QR JSON, MSGB2. manual code, or
-// bare device ID), persist the peer in the paired_devices registry, add its
-// device to the daemon config, and share the relevant managed folders with
-// it via the REST API. Idempotent — re-pairing an already-paired device
-// refreshes its name/folders and re-asserts the daemon config.
+// bare device ID), provision any introduced managed folders this node lacks
+// (the fresh-replica path), persist the peer in the paired_devices registry,
+// add its device to the daemon config, and configure + share the folders via
+// the REST API. Idempotent — re-pairing an already-paired device refreshes
+// its name/folders and re-asserts the daemon config.
+//
+// Folder scope: the payload's folders[] is a SOFT introduction, not a hard
+// cap (see acceptPendingFolders for the events-side statement of the same
+// decision). Every introduced id that maps onto the fixed source enum is
+// honored — provisioned locally when absent — and ids outside the enum are
+// logged and ignored; a bare device ID (no introduction) shares every locally
+// managed folder, the symmetric default. A peer can never name a folder into
+// existence: ids select from the deterministic managed layout only (issue
+// #157 Security Checklist; SPEC-0014 "msgbrowse-Owned Config Generation").
 //
 // The registry write happens BEFORE the REST mutations: the durable trust
 // decision must not be lost to a transient daemon hiccup. If a REST call
 // fails after persistence, the error is surfaced (never swallowed) and the
 // next daemon start regenerates config from the registry anyway
-// (ApplyPeers), converging the daemon on the recorded state.
+// (ApplyPeers), converging the daemon on the recorded state. Provisioning
+// happens before the registry write for the same reason in reverse: a
+// recorded share must always have its root on disk, so restarts' config
+// regeneration (ExistingManagedFolders) rediscovers exactly the recorded set.
 func (m *Manager) Pair(ctx context.Context, code string) (devices.SyncPeer, error) {
 	payload, err := devices.DecodeSyncPayload([]byte(code))
 	if err != nil {
@@ -134,12 +156,10 @@ func (m *Manager) Pair(ctx context.Context, code string) (devices.SyncPeer, erro
 		return devices.SyncPeer{}, fmt.Errorf("device %s is this node: %w", devices.ShortDeviceID(myID), devices.ErrSelfPair)
 	}
 
-	// Folders to share: the payload's introduction intersected with what this
-	// node actually manages — a peer can never name a folder into existence
-	// here (folder ids from the deterministic managed set only, issue #157
-	// Security Checklist). A bare device ID (no introduction) shares every
-	// locally managed folder, the symmetric default.
-	share := intersectFolders(m.folderIDs(), payload.Folders)
+	share, folders, err := m.resolveShare(payload)
+	if err != nil {
+		return devices.SyncPeer{}, fmt.Errorf("pair device %s: %w", devices.ShortDeviceID(payload.DeviceID), err)
+	}
 
 	peer := devices.SyncPeer{
 		DeviceID: payload.DeviceID,
@@ -159,11 +179,52 @@ func (m *Manager) Pair(ctx context.Context, code string) (devices.SyncPeer, erro
 	if err := m.ensureDevice(ctx, peer); err != nil {
 		return peer, err
 	}
+	if err := m.ensureFolders(ctx, folders); err != nil {
+		return peer, err
+	}
 	if err := m.ensureFolderShares(ctx, peer.DeviceID, share); err != nil {
 		return peer, err
 	}
 	m.log.Info("device paired", "device_id", peer.DeviceID, "name", peer.Name, "folders", share)
 	return peer, nil
+}
+
+// resolveShare turns a validated payload's folder introduction into the share
+// set and the concrete managed folders behind it, provisioning any known-
+// source folder this node lacks (the fresh-replica path). An empty
+// introduction — a bare device ID — means every locally managed folder.
+// Introduced ids outside the fixed source enum are logged and dropped, never
+// an error: the rest of the introduction still pairs.
+func (m *Manager) resolveShare(payload *devices.SyncPayload) ([]string, []syncthing.Folder, error) {
+	if len(payload.Folders) == 0 {
+		return m.folderIDs(), m.folders.List(), nil
+	}
+	var (
+		share   []string
+		folders []syncthing.Folder
+		seen    = make(map[string]bool, len(payload.Folders))
+	)
+	for _, id := range payload.Folders {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if _, ok := SourceForFolderID(id); !ok {
+			m.log.Info("ignoring introduced folder (id outside the managed source enum)",
+				"folder", id, "device_id", payload.DeviceID)
+			continue
+		}
+		f, err := m.folders.Provision(id)
+		if err != nil {
+			// A known-source folder that cannot be provisioned is a hard
+			// pairing error (disk trouble), surfaced per SPEC-0014 REQ "Error
+			// Handling Standards" — never a silent partial pair.
+			return nil, nil, err
+		}
+		share = append(share, id)
+		folders = append(folders, f)
+	}
+	return share, folders, nil
 }
 
 // Peers implements web.PairingSource's registry listing for the /settings
@@ -194,6 +255,48 @@ func (m *Manager) ensureDevice(ctx context.Context, peer devices.SyncPeer) error
 	devs = append(devs, syncthing.DeviceConfig{DeviceID: peer.DeviceID, Name: peer.Name})
 	if err := m.api.PutDevices(ctx, devs); err != nil {
 		return fmt.Errorf("pair device %s: add daemon device: %w", peer.ShortID(), err)
+	}
+	return nil
+}
+
+// ensureFolders adds each managed folder to the daemon's live folder config
+// if absent, via read-modify-write on /rest/config/folders — how a folder
+// provisioned mid-run (fresh replica pairing, or an accepted folder offer)
+// becomes syncable before the next restart's config regeneration would pick
+// it up from disk. Only FolderSet-vended folders reach here, so every path is
+// already inside <data_dir>/archives/ (the archive-not-DB guard was asserted
+// at provisioning).
+func (m *Manager) ensureFolders(ctx context.Context, want []syncthing.Folder) error {
+	if len(want) == 0 {
+		return nil
+	}
+	current, err := m.api.GetFolders(ctx)
+	if err != nil {
+		return fmt.Errorf("configure managed folders: read daemon folders: %w", err)
+	}
+	have := make(map[string]bool, len(current))
+	for _, f := range current {
+		have[f.ID] = true
+	}
+	changed := false
+	for _, f := range want {
+		if have[f.ID] {
+			continue
+		}
+		current = append(current, syncthing.FolderConfig{
+			ID:    f.ID,
+			Label: f.Label,
+			Path:  f.Path,
+			Type:  syncthing.FolderTypeSendReceive,
+		})
+		have[f.ID] = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := m.api.PutFolders(ctx, current); err != nil {
+		return fmt.Errorf("configure managed folders: %w", err)
 	}
 	return nil
 }
@@ -245,21 +348,4 @@ func folderSharedWith(f syncthing.FolderConfig, deviceID string) bool {
 		}
 	}
 	return false
-}
-
-// intersectFolders returns the members of local that appear in introduced,
-// preserving local order. An empty introduction means "everything local".
-func intersectFolders(local, introduced []string) []string {
-	if len(introduced) == 0 {
-		out := make([]string, len(local))
-		copy(out, local)
-		return out
-	}
-	var out []string
-	for _, id := range local {
-		if containsString(introduced, id) {
-			out = append(out, id)
-		}
-	}
-	return out
 }

@@ -87,11 +87,14 @@ type ConfigSpec struct {
 // latest.
 const configVersion = 37
 
-// folderType is the Syncthing folder type for every managed archive root:
-// send-receive, so an importer sends and a replica receives through the same
-// config shape (roles are enforced by msgbrowse, not by folder type —
-// SPEC-0014 REQ "Importer and Replica Roles" lands with the pairing story).
-const folderType = "sendreceive"
+// FolderTypeSendReceive is the Syncthing folder type for every managed
+// archive root: send-receive, so an importer sends and a replica receives
+// through the same config shape (roles are enforced by msgbrowse, not by
+// folder type — SPEC-0014 REQ "Importer and Replica Roles" lands with the
+// pairing story). Exported so devsync's live-config folder additions (a
+// replica provisioning a folder mid-run, issue #157) use the identical type
+// the generated config.xml would.
+const FolderTypeSendReceive = "sendreceive"
 
 // XML shapes matching Syncthing's config.xml schema (the subset msgbrowse
 // generates; the daemon fills defaults for everything omitted).
@@ -206,7 +209,7 @@ func GenerateConfigXML(spec ConfigSpec) ([]byte, error) {
 			ID:    f.ID,
 			Label: f.Label,
 			Path:  f.Path,
-			Type:  folderType,
+			Type:  FolderTypeSendReceive,
 			// The filesystem watcher notices exporter writes promptly; the
 			// hourly rescan is the convergence backstop.
 			RescanIntervalS:  3600,
@@ -279,11 +282,11 @@ const FolderIDPrefix = "msgbrowse-"
 func ExistingManagedFolders(dataDir string) ([]Folder, error) {
 	var out []Folder
 	for _, src := range source.All {
-		root, err := setup.ManagedRoot(dataDir, src)
+		f, err := managedFolder(dataDir, src)
 		if err != nil {
-			return nil, fmt.Errorf("resolve managed root for %s: %w", src, err)
+			return nil, err
 		}
-		fi, err := os.Stat(root)
+		fi, err := os.Stat(f.Path)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
@@ -293,13 +296,55 @@ func ExistingManagedFolders(dataDir string) ([]Folder, error) {
 		if !fi.IsDir() {
 			continue
 		}
-		out = append(out, Folder{
-			ID:    FolderIDPrefix + src,
-			Label: "msgbrowse " + source.Label(src) + " archive",
-			Path:  root,
-		})
+		out = append(out, f)
 	}
 	return out, nil
+}
+
+// managedFolder computes the deterministic Folder for a source's managed
+// archive root — the single construction both ExistingManagedFolders and
+// ProvisionManagedFolder use, so a folder provisioned mid-run and one
+// discovered at the next start are byte-identical. setup.ManagedRoot enforces
+// the fixed source enum: no client-supplied string ever becomes a path.
+func managedFolder(dataDir, src string) (Folder, error) {
+	root, err := setup.ManagedRoot(dataDir, src)
+	if err != nil {
+		return Folder{}, fmt.Errorf("resolve managed root for %s: %w", src, err)
+	}
+	return Folder{
+		ID:    FolderIDPrefix + src,
+		Label: "msgbrowse " + source.Label(src) + " archive",
+		Path:  root,
+	}, nil
+}
+
+// ProvisionManagedFolder materializes the managed archive root for a known
+// source at runtime and returns its deterministic Folder — the replica-side
+// pairing path (SPEC-0014 REQ "Importer and Replica Roles"): a fresh replica
+// has no local roots, so accepting an importer's folder introduction must
+// CREATE <dataDir>/archives/<src> before the folder can be configured or
+// shared. Idempotent (an existing root is re-prepared, never damaged), and
+// the archive-not-DB guard holds by construction and by assertion: the root
+// comes only from setup.ManagedRoot (fixed source enum — an unknown src is an
+// error, never a path), and ValidateManagedFolderPath re-checks it is
+// strictly inside <dataDir>/archives/ before anything touches disk. The
+// prepared root carries the .stignore defense-in-depth patterns and the
+// .stfolder marker exactly like a supervisor-prepared folder.
+//
+// Governing: SPEC-0014 "The database is never in a synced folder", REQ
+// "msgbrowse-Owned Config Generation", ADR-0021.
+func ProvisionManagedFolder(dataDir, src string) (Folder, error) {
+	f, err := managedFolder(dataDir, src)
+	if err != nil {
+		return Folder{}, err
+	}
+	if err := ValidateManagedFolderPath(dataDir, f.Path); err != nil {
+		return Folder{}, fmt.Errorf("provision managed folder for %s: %w", src, err)
+	}
+	if err := prepareFolder(f); err != nil {
+		return Folder{}, fmt.Errorf("provision managed folder for %s: %w", src, err)
+	}
+	return f, nil
 }
 
 // ValidateManagedFolderPath rejects any folder path that is not strictly

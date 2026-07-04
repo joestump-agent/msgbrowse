@@ -12,9 +12,14 @@
 package devsync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -177,19 +182,27 @@ func (f *fakeImporter) count() int {
 	return len(f.calls)
 }
 
-// startWatcher builds and starts a fast-debounce watcher; the cleanup asserts
-// the drain completes (no leaked goroutines).
+// startWatcher builds and starts a fast-debounce watcher over the standard
+// two-source folder fixture; the cleanup asserts the drain completes (no
+// leaked goroutines).
 func startWatcher(t *testing.T, api *fakeAPI, st PeerStore, imp Importer) (*Watcher, context.CancelFunc) {
+	t.Helper()
+	return startWatcherWith(t, api, st, imp, testFolderSet(t), testLogger())
+}
+
+// startWatcherWith is startWatcher with an explicit folder set and logger,
+// for tests exercising provisioning (fresh-replica states) or log output.
+func startWatcherWith(t *testing.T, api *fakeAPI, st PeerStore, imp Importer, fs *FolderSet, log *slog.Logger) (*Watcher, context.CancelFunc) {
 	t.Helper()
 	w, err := NewWatcher(WatcherOptions{
 		API:      api,
 		Store:    st,
 		Importer: imp,
-		Folders:  managedFolders(),
+		Folders:  fs,
 		Quiet:    30 * time.Millisecond,
 		// A short poll keeps the pump responsive to cancellation in tests.
 		PollTimeout: 20 * time.Millisecond,
-		Logger:      testLogger(),
+		Logger:      log,
 	})
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
@@ -390,16 +403,190 @@ func TestAutoAcceptPendingFolderOnlyManagedAndPaired(t *testing.T) {
 }
 
 // TestWatcherRejectsUnknownFolderMapping: a managed folder whose id does not
-// map onto a known source is a construction-time error, not a silent skip.
+// map onto a known source is a construction-time error (now enforced by
+// NewFolderSet, which every watcher requires), not a silent skip.
 func TestWatcherRejectsUnknownFolderMapping(t *testing.T) {
+	if _, err := NewFolderSet(t.TempDir(), []syncthing.Folder{{ID: "msgbrowse-nonsense", Path: "/x"}}); err == nil {
+		t.Fatal("NewFolderSet accepted a folder with no source mapping")
+	}
+	// And a watcher without a folder set at all is refused outright.
 	_, err := NewWatcher(WatcherOptions{
 		API:      newFakeAPI(),
 		Store:    newMemPeerStore(),
 		Importer: &fakeImporter{},
-		Folders:  []syncthing.Folder{{ID: "msgbrowse-nonsense", Path: "/x"}},
 		Logger:   testLogger(),
 	})
 	if err == nil {
-		t.Fatal("NewWatcher accepted a folder with no source mapping")
+		t.Fatal("NewWatcher accepted nil Folders")
 	}
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer so a slog handler on the watcher
+// goroutines and test assertions never race.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestAcceptedFolderOfferPersistsAndSurvivesRestart is the MAJOR review-
+// finding scenario (issue #157 adversarial review, finding 2): a paired
+// device offers a known-source folder this node was not sharing with it. The
+// acceptance must (a) provision the managed root when absent, (b) PERSIST the
+// widened share to the peer's registry row, and (c) survive a restart — the
+// registry-driven config regeneration (ExistingManagedFolders + ApplyPeers)
+// must reproduce the share instead of flip-flopping it away. An offer whose
+// folder id is outside the fixed source enum is rejected and logged, changing
+// nothing.
+func TestAcceptedFolderOfferPersistsAndSurvivesRestart(t *testing.T) {
+	// This node manages only the signal root; the daemon config matches.
+	dataDir := t.TempDir()
+	signal, err := syncthing.ProvisionManagedFolder(dataDir, "signal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := NewFolderSet(dataDir, []syncthing.Folder{signal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := newFakeAPI()
+	api.mu.Lock()
+	api.folders = []syncthing.FolderConfig{{ID: signal.ID, Path: signal.Path, Type: syncthing.FolderTypeSendReceive}}
+	api.mu.Unlock()
+
+	st := newMemPeerStore()
+	if _, err := st.UpsertSyncPeer(context.Background(), devices.SyncPeer{
+		DeviceID: peerAID, Name: "kitchen-mac", Folders: []string{"msgbrowse-signal"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logBuf := &syncBuffer{}
+	startWatcherWith(t, api, st, &fakeImporter{}, fs, slog.New(slog.NewTextHandler(logBuf, nil)))
+
+	// An offer with a folder id OUTSIDE the source enum: rejected + logged.
+	api.push("PendingFoldersChanged", map[string]any{
+		"added": []map[string]any{{"deviceID": peerAID, "folderID": "msgbrowse-attacker"}},
+	})
+	// The paired device offers the imessage folder this node lacks: accepted.
+	api.push("PendingFoldersChanged", map[string]any{
+		"added": []map[string]any{{"deviceID": peerAID, "folderID": "msgbrowse-imessage"}},
+	})
+
+	waitFor(t, time.Second, func() bool {
+		got := api.folderDeviceIDs("msgbrowse-imessage")
+		return len(got) == 1 && got[0] == peerAID
+	}, "known-source folder offer from the paired device was not accepted")
+
+	// (a) The managed root was provisioned.
+	if fi, err := os.Stat(filepath.Join(dataDir, "archives", "imessage")); err != nil || !fi.IsDir() {
+		t.Fatalf("imessage root not provisioned: %v", err)
+	}
+	// (b) The registry row carries the widened share set — what /settings and
+	// `msgbrowse devices list` render.
+	stored, err := st.GetSyncPeerByDeviceID(context.Background(), peerAID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(stored.Folders, "msgbrowse-signal") || !containsString(stored.Folders, "msgbrowse-imessage") {
+		t.Fatalf("registry folders = %v, want signal AND imessage", stored.Folders)
+	}
+	// (c) Simulated restart: regenerate the folder/device wiring exactly as
+	// startDeviceSync does — from disk + registry — and the accepted share is
+	// still there.
+	existing, err := syncthing.ExistingManagedFolders(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers, err := st.ListSyncPeers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	regenerated, _ := ApplyPeers(existing, peers)
+	found := false
+	for _, f := range regenerated {
+		if f.ID == "msgbrowse-imessage" {
+			found = true
+			if !containsString(f.DeviceIDs, peerAID) {
+				t.Errorf("regenerated imessage folder not shared with the peer: %v", f.DeviceIDs)
+			}
+		}
+	}
+	if !found {
+		t.Error("regenerated config lost the accepted imessage folder")
+	}
+
+	// The out-of-enum offer changed nothing and left a log trail.
+	if got := api.folderDeviceIDs("msgbrowse-attacker"); got != nil {
+		t.Errorf("out-of-enum folder entered the daemon config: %v", got)
+	}
+	if containsString(stored.Folders, "msgbrowse-attacker") {
+		t.Error("out-of-enum folder entered the registry")
+	}
+	if !strings.Contains(logBuf.String(), "outside the managed source enum") {
+		t.Error("rejected out-of-enum offer was not logged")
+	}
+}
+
+// TestProvisionedFolderTriggersImport closes the fresh-replica loop (MAJOR
+// review finding 1): a watcher started with NO managed folders begins
+// dispatching imports for a folder the pairing Manager provisions mid-run,
+// because the two share one live FolderSet — the synced fixture that lands
+// after pairing is imported without a restart.
+func TestProvisionedFolderTriggersImport(t *testing.T) {
+	fs, err := NewFolderSet(t.TempDir(), nil) // fresh replica: nothing managed
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := newFakeAPI()
+	api.mu.Lock()
+	api.folders = nil // daemon config is empty too
+	api.mu.Unlock()
+	imp := &fakeImporter{}
+	st := newMemPeerStore()
+	startWatcherWith(t, api, st, imp, fs, testLogger())
+
+	// Before pairing, a signal folder event is unmanaged noise.
+	api.push("FolderSummary", folderEvent("msgbrowse-signal"))
+	time.Sleep(100 * time.Millisecond)
+	if imp.count() != 0 {
+		t.Fatalf("unmanaged folder produced %d imports", imp.count())
+	}
+
+	// The operator pairs the importer, whose payload introduces the signal
+	// folder — provisioning it into the SHARED folder set.
+	m := NewManager(api, st, "replica", fs, testLogger())
+	if _, err := m.Pair(context.Background(), mustSyncCode(t, peerAID, []string{"msgbrowse-signal"}, "importer")); err != nil {
+		t.Fatalf("Pair: %v", err)
+	}
+
+	// Syncthing finishes delivering the folder: the watcher now imports it.
+	api.setCompletion("msgbrowse-signal", syncthing.Completion{CompletionPct: 100})
+	api.push("FolderSummary", folderEvent("msgbrowse-signal"))
+	waitFor(t, time.Second, func() bool { return imp.count() == 1 },
+		"folder provisioned by pairing did not trigger an import")
+}
+
+// mustSyncCode encodes a v2 pairing payload as its manual code.
+func mustSyncCode(t *testing.T, deviceID string, folders []string, name string) string {
+	t.Helper()
+	p, err := devices.NewSyncPayload(deviceID, folders, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := p.EncodeManualCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code
 }

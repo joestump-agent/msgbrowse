@@ -201,7 +201,15 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, r
 	if err != nil {
 		return nil, err
 	}
-	folders, err := syncthing.ExistingManagedFolders(cfg.DataDir)
+	existing, err := syncthing.ExistingManagedFolders(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("device sync start failed: %w", err)
+	}
+	// The LIVE managed-folder set, shared by the pairing manager and the
+	// watcher: pairing can provision a managed root a fresh replica lacks,
+	// and the watcher must see it immediately (SPEC-0014 REQ "Importer and
+	// Replica Roles").
+	folderSet, err := devsync.NewFolderSet(cfg.DataDir, existing)
 	if err != nil {
 		return nil, fmt.Errorf("device sync start failed: %w", err)
 	}
@@ -209,7 +217,7 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, r
 	if err != nil {
 		return nil, fmt.Errorf("device sync start failed: load paired devices: %w", err)
 	}
-	folders, peerDevices := devsync.ApplyPeers(folders, peers)
+	folders, peerDevices := devsync.ApplyPeers(existing, peers)
 	sup, err := syncthing.New(syncthing.Options{
 		BinPath:    bin,
 		DataDir:    cfg.DataDir,
@@ -227,12 +235,12 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, r
 	}
 
 	client := sup.Client()
-	manager := devsync.NewManager(client, st, deviceName(cfg), folders, slog.Default())
+	manager := devsync.NewManager(client, st, deviceName(cfg), folderSet, slog.Default())
 	watcher, err := devsync.NewWatcher(devsync.WatcherOptions{
 		API:      client,
 		Store:    st,
 		Importer: runner,
-		Folders:  folders,
+		Folders:  folderSet,
 		Logger:   slog.Default(),
 	})
 	if err != nil {

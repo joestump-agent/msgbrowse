@@ -18,6 +18,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -126,6 +128,19 @@ func (d *stubDaemon) folderDeviceIDs(folderID string) []string {
 	return nil
 }
 
+// folderConfig returns the daemon's config entry for folderID, ok=false when
+// the folder is not configured.
+func (d *stubDaemon) folderConfig(folderID string) (syncthing.FolderConfig, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, f := range d.folders {
+		if f.ID == folderID {
+			return f, true
+		}
+	}
+	return syncthing.FolderConfig{}, false
+}
+
 // memPeerStore is an in-memory PeerStore.
 type memPeerStore struct {
 	mu      sync.Mutex
@@ -185,12 +200,36 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// managedFolders is the standard two-source folder fixture.
-func managedFolders() []syncthing.Folder {
-	return []syncthing.Folder{
-		{ID: "msgbrowse-signal", Label: "Signal", Path: "/tmp/x/archives/signal"},
-		{ID: "msgbrowse-imessage", Label: "iMessage", Path: "/tmp/x/archives/imessage"},
+// testFolderSet is the standard two-source folder fixture: a real managed
+// layout (signal + imessage roots) provisioned under a temp data dir, wrapped
+// in the live FolderSet the Manager and Watcher share.
+func testFolderSet(t *testing.T) *FolderSet {
+	t.Helper()
+	dataDir := t.TempDir()
+	var folders []syncthing.Folder
+	for _, src := range []string{"signal", "imessage"} {
+		f, err := syncthing.ProvisionManagedFolder(dataDir, src)
+		if err != nil {
+			t.Fatalf("provision %s fixture root: %v", src, err)
+		}
+		folders = append(folders, f)
 	}
+	fs, err := NewFolderSet(dataDir, folders)
+	if err != nil {
+		t.Fatalf("NewFolderSet: %v", err)
+	}
+	return fs
+}
+
+// emptyFolderSet is a FRESH-REPLICA fixture: a data dir with NO managed roots
+// at all (the state MAJOR review finding 1 exercises).
+func emptyFolderSet(t *testing.T) *FolderSet {
+	t.Helper()
+	fs, err := NewFolderSet(t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("NewFolderSet: %v", err)
+	}
+	return fs
 }
 
 func stubFolderConfigs() []syncthing.FolderConfig {
@@ -206,7 +245,7 @@ func stubFolderConfigs() []syncthing.FolderConfig {
 func TestPairAddsDeviceAndSharesFolders(t *testing.T) {
 	daemon := newStubDaemon(t, stubFolderConfigs())
 	st := newMemPeerStore()
-	m := NewManager(daemon.client(), st, "studio-mac", managedFolders(), testLogger())
+	m := NewManager(daemon.client(), st, "studio-mac", testFolderSet(t), testLogger())
 
 	payload, err := devices.NewSyncPayload(peerAID, []string{"msgbrowse-signal"}, "kitchen-mac")
 	if err != nil {
@@ -249,7 +288,7 @@ func TestPairAddsDeviceAndSharesFolders(t *testing.T) {
 func TestPairBareDeviceIDSharesAllManaged(t *testing.T) {
 	daemon := newStubDaemon(t, stubFolderConfigs())
 	st := newMemPeerStore()
-	m := NewManager(daemon.client(), st, "studio-mac", managedFolders(), testLogger())
+	m := NewManager(daemon.client(), st, "studio-mac", testFolderSet(t), testLogger())
 
 	if _, err := m.Pair(context.Background(), strings.ToLower(peerBID)); err != nil {
 		t.Fatalf("Pair(bare id): %v", err)
@@ -266,7 +305,7 @@ func TestPairBareDeviceIDSharesAllManaged(t *testing.T) {
 func TestPairIdempotent(t *testing.T) {
 	daemon := newStubDaemon(t, stubFolderConfigs())
 	st := newMemPeerStore()
-	m := NewManager(daemon.client(), st, "studio-mac", managedFolders(), testLogger())
+	m := NewManager(daemon.client(), st, "studio-mac", testFolderSet(t), testLogger())
 
 	for i := 0; i < 2; i++ {
 		if _, err := m.Pair(context.Background(), peerAID); err != nil {
@@ -290,7 +329,7 @@ func TestPairIdempotent(t *testing.T) {
 func TestPairRejectsSelf(t *testing.T) {
 	daemon := newStubDaemon(t, stubFolderConfigs())
 	st := newMemPeerStore()
-	m := NewManager(daemon.client(), st, "studio-mac", managedFolders(), testLogger())
+	m := NewManager(daemon.client(), st, "studio-mac", testFolderSet(t), testLogger())
 
 	_, err := m.Pair(context.Background(), selfID)
 	if !errors.Is(err, devices.ErrSelfPair) {
@@ -309,7 +348,7 @@ func TestPairRejectsSelf(t *testing.T) {
 func TestPairRejectsInvalidCode(t *testing.T) {
 	daemon := newStubDaemon(t, stubFolderConfigs())
 	st := newMemPeerStore()
-	m := NewManager(daemon.client(), st, "studio-mac", managedFolders(), testLogger())
+	m := NewManager(daemon.client(), st, "studio-mac", testFolderSet(t), testLogger())
 
 	for _, code := range []string{"", "garbage", "MSGB2.!!!!", `{"v":1,"endpoint":"x:1","token":"t","fp":"ff"}`} {
 		if _, err := m.Pair(context.Background(), code); !errors.Is(err, devices.ErrInvalidSyncPayload) {
@@ -326,7 +365,7 @@ func TestPairRejectsInvalidCode(t *testing.T) {
 // name — public introduction data only.
 func TestActivePairingPayload(t *testing.T) {
 	daemon := newStubDaemon(t, stubFolderConfigs())
-	m := NewManager(daemon.client(), newMemPeerStore(), "studio-mac", managedFolders(), testLogger())
+	m := NewManager(daemon.client(), newMemPeerStore(), "studio-mac", testFolderSet(t), testLogger())
 
 	p, ok := m.ActivePairing(context.Background())
 	if !ok {
@@ -342,8 +381,96 @@ func TestActivePairingPayload(t *testing.T) {
 	// Engine down: a fresh manager against a dead endpoint reports not-ok
 	// rather than erroring the page.
 	daemon.srv.Close()
-	m2 := NewManager(daemon.client(), newMemPeerStore(), "x", nil, testLogger())
+	m2 := NewManager(daemon.client(), newMemPeerStore(), "x", emptyFolderSet(t), testLogger())
 	if _, ok := m2.ActivePairing(context.Background()); ok {
 		t.Error("ActivePairing ok against a dead engine")
+	}
+}
+
+// TestPairFreshReplicaProvisionsIntroducedFolders is the MAJOR review-finding
+// scenario (issue #157 adversarial review, finding 1): a FRESH REPLICA — no
+// pre-existing managed roots, an empty daemon folder config — pairs with an
+// importer whose payload introduces a folder. The replica must PROVISION the
+// corresponding managed root (<data_dir>/archives/<source>), add the folder
+// to the live daemon config, share it with the importer, and record the share
+// in the registry — while an introduced id outside the fixed source enum is
+// ignored and never becomes a path (SPEC-0014 REQ "Importer and Replica
+// Roles", "msgbrowse-Owned Config Generation").
+func TestPairFreshReplicaProvisionsIntroducedFolders(t *testing.T) {
+	dataDir := t.TempDir()
+	fs, err := NewFolderSet(dataDir, nil) // no local roots at all
+	if err != nil {
+		t.Fatalf("NewFolderSet: %v", err)
+	}
+	daemon := newStubDaemon(t, nil) // and none configured in the daemon
+	st := newMemPeerStore()
+	m := NewManager(daemon.client(), st, "replica", fs, testLogger())
+
+	payload, err := devices.NewSyncPayload(peerAID, []string{"msgbrowse-signal", "not-a-real-folder"}, "importer")
+	if err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	code, err := payload.EncodeManualCode()
+	if err != nil {
+		t.Fatalf("manual code: %v", err)
+	}
+	peer, err := m.Pair(context.Background(), code)
+	if err != nil {
+		t.Fatalf("Pair on a fresh replica: %v", err)
+	}
+
+	// The managed root was provisioned — Syncthing-ready, under archives/.
+	root := filepath.Join(dataDir, "archives", "signal")
+	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+		t.Fatalf("managed root not provisioned at %s: %v", root, err)
+	}
+	for _, marker := range []string{".stignore", ".stfolder"} {
+		if _, err := os.Stat(filepath.Join(root, marker)); err != nil {
+			t.Errorf("provisioned root missing %s: %v", marker, err)
+		}
+	}
+	// The archive-not-DB guard held: the provisioned path validates, and the
+	// data_dir itself is still refused.
+	if err := syncthing.ValidateManagedFolderPath(dataDir, root); err != nil {
+		t.Errorf("provisioned root failed the archive-not-DB validation: %v", err)
+	}
+	if err := syncthing.ValidateManagedFolderPath(dataDir, dataDir); err == nil {
+		t.Error("data_dir passed the archive-not-DB validation")
+	}
+
+	// The live daemon config gained the folder, shared with the importer.
+	fc, ok := daemon.folderConfig("msgbrowse-signal")
+	if !ok {
+		t.Fatal("provisioned folder was not added to the daemon config")
+	}
+	if fc.Path != root || fc.Type != syncthing.FolderTypeSendReceive {
+		t.Errorf("daemon folder config = %+v, want path %s type %s", fc, root, syncthing.FolderTypeSendReceive)
+	}
+	if got := daemon.folderDeviceIDs("msgbrowse-signal"); len(got) != 1 || got[0] != peerAID {
+		t.Errorf("signal folder devices = %v, want [%s]", got, peerAID)
+	}
+
+	// The out-of-enum id was ignored: not shared, not provisioned, no path.
+	if peer.Folders == nil || len(peer.Folders) != 1 || peer.Folders[0] != "msgbrowse-signal" {
+		t.Errorf("peer folders = %v, want [msgbrowse-signal]", peer.Folders)
+	}
+	if _, ok := daemon.folderConfig("not-a-real-folder"); ok {
+		t.Error("out-of-enum folder id reached the daemon config")
+	}
+
+	// The registry recorded the true share set, and the shared folder set —
+	// which the Watcher reads — now manages the provisioned folder.
+	stored, err := st.GetSyncPeerByDeviceID(context.Background(), peerAID)
+	if err != nil {
+		t.Fatalf("peer not persisted: %v", err)
+	}
+	if len(stored.Folders) != 1 || stored.Folders[0] != "msgbrowse-signal" {
+		t.Errorf("registry folders = %v, want [msgbrowse-signal]", stored.Folders)
+	}
+	if !fs.Contains("msgbrowse-signal") {
+		t.Error("provisioned folder not visible in the shared FolderSet")
+	}
+	if fs.Contains("not-a-real-folder") {
+		t.Error("out-of-enum folder id entered the FolderSet")
 	}
 }

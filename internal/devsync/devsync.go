@@ -15,7 +15,13 @@
 // pairing records the operator's explicit acceptance of exactly one device
 // ID, and only that recorded acceptance ever drives configuration changes —
 // the watcher auto-accepts pending devices/folders ONLY for device IDs in the
-// paired_devices registry, never blanket.
+// paired_devices registry, never blanket. Folder scope within a paired
+// device is the fixed source enum: an introduced or offered folder id that
+// maps onto "msgbrowse-<source>" is honored — provisioning the managed root
+// when this node lacks it (the replica role) and persisting the share to the
+// registry so restarts regenerate it — while any other id is refused. See
+// Manager.Pair and Watcher.acceptPendingFolders for the full statement of
+// that decision.
 //
 // Governing: ADR-0021 ("msgbrowse owns config generation … the pairing UX …
 // the folder-watch → re-ingest trigger"), SPEC-0014 REQ "Pairing via Device

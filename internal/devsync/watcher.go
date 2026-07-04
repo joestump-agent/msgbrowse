@@ -15,9 +15,14 @@
 //     PendingFoldersChanged events are resolved ONLY for device IDs the
 //     operator explicitly paired (rows in paired_devices). A pending device
 //     in the registry is (re-)added to the daemon config; a pending folder
-//     offer from a registry peer is accepted only for that folder id within
-//     the locally managed set. Anything else is logged and ignored — never a
-//     blanket accept (SPEC-0014 "A device ID alone does not grant sync").
+//     offer from a registry peer is accepted for any folder id that maps
+//     onto the FIXED SOURCE ENUM — provisioning the managed root when this
+//     node lacks it (the fresh-replica path, SPEC-0014 REQ "Importer and
+//     Replica Roles") and persisting the widened share to the peer's
+//     registry row so restarts regenerate the identical config. Anything
+//     else — an unpaired device, or a folder id outside the enum — is logged
+//     and ignored, never a blanket accept (SPEC-0014 "A device ID alone does
+//     not grant sync"; see acceptPendingFolders for the scope decision).
 //
 // Worker hygiene mirrors internal/onboard's runner: one lifecycle owner, a
 // cancellable context propagated everywhere, Start/Wait with a clean drain,
@@ -34,14 +39,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/joestump/msgbrowse/internal/onboard"
-	"github.com/joestump/msgbrowse/internal/source"
 	"github.com/joestump/msgbrowse/internal/syncthing"
 )
 
@@ -81,9 +83,11 @@ type WatcherOptions struct {
 	Store PeerStore
 	// Importer runs the incremental import (the onboard Runner).
 	Importer Importer
-	// Folders are the locally managed archive folders; only their events are
-	// acted on.
-	Folders []syncthing.Folder
+	// Folders is the LIVE managed-folder set, shared with the pairing
+	// Manager: only events for its members trigger imports, and an accepted
+	// folder offer provisions into it (so a folder that appears mid-run is
+	// watched immediately). Required.
+	Folders *FolderSet
 	// Quiet is the debounce window: a burst of folder events within it
 	// coalesces into one import check. 0 means the 3s default.
 	Quiet time.Duration
@@ -103,9 +107,12 @@ type Watcher struct {
 	pollWait time.Duration
 	log      *slog.Logger
 
-	// folderSource maps managed folder id → source id, precomputed from
-	// Folders so an event for any other folder is ignored outright.
-	folderSource map[string]string
+	// folders is the live managed-folder set shared with the pairing
+	// Manager; an event for any folder outside it is ignored outright.
+	folders *FolderSet
+	// mgr executes the accept-side config mutations (ensureDevice /
+	// ensureFolders / ensureFolderShares) over the same folder set.
+	mgr *Manager
 
 	events chan syncthing.Event
 	wg     sync.WaitGroup
@@ -123,6 +130,9 @@ func NewWatcher(o WatcherOptions) (*Watcher, error) {
 	if o.Importer == nil {
 		return nil, errors.New("devsync watcher: Importer is required")
 	}
+	if o.Folders == nil {
+		return nil, errors.New("devsync watcher: Folders is required")
+	}
 	if o.Quiet <= 0 {
 		o.Quiet = defaultQuiet
 	}
@@ -133,24 +143,19 @@ func NewWatcher(o WatcherOptions) (*Watcher, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	fs := make(map[string]string, len(o.Folders))
-	for _, f := range o.Folders {
-		src := strings.TrimPrefix(f.ID, syncthing.FolderIDPrefix)
-		if !source.IsKnown(src) {
-			return nil, fmt.Errorf("devsync watcher: folder %q does not map to a known source", f.ID)
-		}
-		fs[f.ID] = src
-	}
 	return &Watcher{
-		api:          o.API,
-		st:           o.Store,
-		importer:     o.Importer,
-		quiet:        o.Quiet,
-		pollWait:     o.PollTimeout,
-		log:          log.With("component", "devsync"),
-		folderSource: fs,
-		events:       make(chan syncthing.Event, 16),
-		done:         make(chan struct{}),
+		api:      o.API,
+		st:       o.Store,
+		importer: o.Importer,
+		quiet:    o.Quiet,
+		pollWait: o.PollTimeout,
+		log:      log.With("component", "devsync"),
+		folders:  o.Folders,
+		// The watcher's own manager over the shared folder set; the friendly
+		// name is irrelevant here (it only feeds ActivePairing payloads).
+		mgr:    NewManager(o.API, o.Store, "", o.Folders, log),
+		events: make(chan syncthing.Event, 16),
+		done:   make(chan struct{}),
 	}, nil
 }
 
@@ -295,8 +300,7 @@ func (w *Watcher) eventSource(ev syncthing.Event) (string, bool) {
 		w.log.Warn("undecodable folder event", "type", ev.Type, "error", err)
 		return "", false
 	}
-	src, ok := w.folderSource[data.Folder]
-	return src, ok
+	return w.folders.SourceFor(data.Folder)
 }
 
 // tryImport gates on folder completion and dispatches the incremental import.
@@ -366,12 +370,11 @@ func (w *Watcher) acceptPendingDevices(ctx context.Context, ev syncthing.Event) 
 				"device_id", add.DeviceID, "name", add.Name)
 			continue
 		}
-		m := NewManager(w.api, w.st, "", nil, w.log)
-		if err := m.ensureDevice(ctx, *peer); err != nil {
+		if err := w.mgr.ensureDevice(ctx, *peer); err != nil {
 			w.log.Warn("could not accept paired pending device", "device_id", peer.DeviceID, "error", err)
 			continue
 		}
-		if err := m.ensureFolderShares(ctx, peer.DeviceID, w.managedIntersect(peer.Folders)); err != nil {
+		if err := w.mgr.ensureFolderShares(ctx, peer.DeviceID, w.managedIntersect(peer.Folders)); err != nil {
 			w.log.Warn("could not re-share folders with paired device", "device_id", peer.DeviceID, "error", err)
 			continue
 		}
@@ -379,11 +382,28 @@ func (w *Watcher) acceptPendingDevices(ctx context.Context, ev syncthing.Event) 
 	}
 }
 
-// acceptPendingFolders resolves a PendingFoldersChanged event: an offered
-// folder is accepted only when BOTH the offering device is in the paired
-// registry AND the folder id is one this node manages — then the folder is
-// shared with that device. Offers from unpaired devices, or for folder ids
-// outside the managed set, are logged and ignored.
+// acceptPendingFolders resolves a PendingFoldersChanged event under the
+// SPEC-0014 acceptance scope:
+//
+// Scope decision (issue #157 review): pair-time folders[] is a SOFT
+// introduction, not a hard cap. An offer is accepted when BOTH the offering
+// device is in the paired registry AND the folder id maps onto the fixed
+// source enum ("msgbrowse-<source>") — even if this node has never seen that
+// folder before. The spec's both-ends-acceptance language places the trust
+// decision on the DEVICE ("both peers MUST have accepted the other's device
+// ID before any archive data flows"); folder ids are deterministic and
+// public, and the replica role requires receiving archives for sources this
+// node has no local roots for. What is NEVER accepted: an offer from an
+// unpaired device, or a folder id outside the enum — both are logged and
+// ignored, so a peer can never name a folder into existence.
+//
+// Accepting means: provision the managed root if absent (fresh-replica
+// path), PERSIST the widened share to the peer's registry row FIRST (the
+// durable decision — ApplyPeers regenerates the daemon config from the
+// registry on every restart, so an unpersisted share would flip-flop away),
+// then add the folder to the live daemon config and share it. /settings and
+// `msgbrowse devices list` both render the registry, so the recorded share
+// set is always the true one.
 func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) {
 	var data struct {
 		Added []struct {
@@ -396,8 +416,8 @@ func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) 
 		return
 	}
 	for _, add := range data.Added {
-		if _, managed := w.folderSource[add.FolderID]; !managed {
-			w.log.Info("ignoring pending folder offer (not a managed folder)",
+		if _, ok := SourceForFolderID(add.FolderID); !ok {
+			w.log.Info("ignoring pending folder offer (folder id outside the managed source enum)",
 				"folder", add.FolderID, "device_id", add.DeviceID)
 			continue
 		}
@@ -407,8 +427,29 @@ func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) 
 				"folder", add.FolderID, "device_id", add.DeviceID)
 			continue
 		}
-		m := NewManager(w.api, w.st, "", nil, w.log)
-		if err := m.ensureFolderShares(ctx, peer.DeviceID, []string{add.FolderID}); err != nil {
+		folder, err := w.folders.Provision(add.FolderID)
+		if err != nil {
+			w.log.Warn("could not provision offered managed folder",
+				"folder", add.FolderID, "device_id", peer.DeviceID, "error", err)
+			continue
+		}
+		// Persist before the daemon mutations: a restart regenerates config
+		// from the registry (ApplyPeers), so the recorded set is what makes
+		// the acceptance durable rather than flip-flopping away.
+		if !containsString(peer.Folders, add.FolderID) {
+			peer.Folders = append(peer.Folders, add.FolderID)
+			if _, err := w.st.UpsertSyncPeer(ctx, *peer); err != nil {
+				w.log.Warn("could not persist widened folder share",
+					"folder", add.FolderID, "device_id", peer.DeviceID, "error", err)
+				continue
+			}
+		}
+		if err := w.mgr.ensureFolders(ctx, []syncthing.Folder{folder}); err != nil {
+			w.log.Warn("could not configure offered folder",
+				"folder", add.FolderID, "device_id", peer.DeviceID, "error", err)
+			continue
+		}
+		if err := w.mgr.ensureFolderShares(ctx, peer.DeviceID, []string{add.FolderID}); err != nil {
 			w.log.Warn("could not share offered folder with paired device",
 				"folder", add.FolderID, "device_id", peer.DeviceID, "error", err)
 			continue
@@ -423,7 +464,7 @@ func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) 
 func (w *Watcher) managedIntersect(folders []string) []string {
 	var out []string
 	for _, f := range folders {
-		if _, ok := w.folderSource[f]; ok {
+		if w.folders.Contains(f) {
 			out = append(out, f)
 		}
 	}

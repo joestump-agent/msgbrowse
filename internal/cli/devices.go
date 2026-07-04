@@ -13,11 +13,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/joestump/msgbrowse/internal/devices"
 	"github.com/spf13/cobra"
 )
 
@@ -52,25 +55,39 @@ func newDevicesListCommand() *cobra.Command {
 				return err
 			}
 			defer st.Close()
-
-			peers, err := st.ListSyncPeers(cmd.Context())
-			if err != nil {
-				return err
-			}
-			if len(peers) == 0 {
-				fmt.Println("No devices paired. Pair one from Settings in the web UI.")
-				return nil
-			}
-			w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tDEVICE ID\tFOLDERS\tPAIRED")
-			for _, p := range peers {
-				folders := "-"
-				if len(p.Folders) > 0 {
-					folders = strings.Join(p.Folders, ",")
-				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.Name, p.DeviceID, folders, p.PairedAt.Local().Format("2006-01-02 15:04"))
-			}
-			return w.Flush()
+			return runDevicesList(cmd.Context(), st, os.Stdout)
 		},
 	}
+}
+
+// syncPeerLister is the store seam runDevicesList reads through (*store.Store
+// satisfies it; tests substitute fakes and error scripts).
+type syncPeerLister interface {
+	ListSyncPeers(ctx context.Context) ([]devices.SyncPeer, error)
+}
+
+// runDevicesList renders the paired-peer registry — the same rows /settings
+// shows, because both read paired_devices, which records the TRUE share set
+// (including folders widened by accepted offers, issue #157 review finding
+// 2). Extracted from the cobra RunE so the CLI surface is testable without a
+// config file or real data dir.
+func runDevicesList(ctx context.Context, st syncPeerLister, out io.Writer) error {
+	peers, err := st.ListSyncPeers(ctx)
+	if err != nil {
+		return err
+	}
+	if len(peers) == 0 {
+		fmt.Fprintln(out, "No devices paired. Pair one from Settings in the web UI.")
+		return nil
+	}
+	w := tabwriter.NewWriter(out, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tDEVICE ID\tFOLDERS\tPAIRED")
+	for _, p := range peers {
+		folders := "-"
+		if len(p.Folders) > 0 {
+			folders = strings.Join(p.Folders, ",")
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.Name, p.DeviceID, folders, p.PairedAt.Local().Format("2006-01-02 15:04"))
+	}
+	return w.Flush()
 }

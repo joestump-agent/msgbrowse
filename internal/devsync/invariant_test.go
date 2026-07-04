@@ -124,11 +124,13 @@ func TestSyncedFolderSetNeverIncludesDataDirOrDB(t *testing.T) {
 	}
 }
 
-// TestReplicaDBEqualsFreshIngest is the fixture-level replica property: copy
-// the Signal fixture archive into a replica's managed root exactly as
-// Syncthing would deliver it (files only, plus Syncthing's .stfolder marker
-// and .stignore — never a database), import it, and assert the replica's
-// rows are identical to a fresh direct ingest of the source fixture.
+// TestReplicaDBEqualsFreshIngest is the fixture-level replica property,
+// starting from the true fresh-replica state (issue #157 adversarial review,
+// finding 1): the replica has NO managed roots until pairing with the
+// importer PROVISIONS one, Syncthing then delivers the archive files into it
+// (files only, plus Syncthing's .stfolder marker and .stignore — never a
+// database), the replica imports, and its rows are identical to a fresh
+// direct ingest of the source fixture.
 func TestReplicaDBEqualsFreshIngest(t *testing.T) {
 	fixture := filepath.Join("..", "..", "testdata", "archive")
 	ctx := context.Background()
@@ -144,18 +146,36 @@ func TestReplicaDBEqualsFreshIngest(t *testing.T) {
 		t.Fatalf("importer ingest: %v", err)
 	}
 
-	// The "replica node": Syncthing delivered the same archive files into
-	// <data_dir>/archives/signal. Simulate the delivery as a file copy plus
-	// the Syncthing folder artifacts. NO database file is copied — that is
-	// the invariant under test.
+	// The "replica node" starts with an empty data dir — no archives/ subtree
+	// at all. Pairing with the importer (whose payload introduces the signal
+	// folder) is what provisions <data_dir>/archives/signal.
 	replicaData := t.TempDir()
-	replicaRoot := filepath.Join(replicaData, "archives", "signal")
-	copyTree(t, filepath.Join(fixture, "export"), filepath.Join(replicaRoot, "export"))
-	if err := os.MkdirAll(filepath.Join(replicaRoot, ".stfolder"), 0o700); err != nil {
+	folderSet, err := NewFolderSet(replicaData, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(replicaRoot, ".stignore"), []byte("*.db\n"), 0o600); err != nil {
-		t.Fatal(err)
+	m := NewManager(newStubDaemon(t, nil).client(), newMemPeerStore(), "replica", folderSet, testLogger())
+	if _, err := m.Pair(ctx, mustSyncCode(t, peerAID, []string{"msgbrowse-signal"}, "importer")); err != nil {
+		t.Fatalf("fresh-replica Pair: %v", err)
+	}
+	managed := folderSet.List()
+	if len(managed) != 1 {
+		t.Fatalf("managed folders after pair = %d, want 1", len(managed))
+	}
+	replicaRoot := managed[0].Path
+	if want := filepath.Join(replicaData, "archives", "signal"); replicaRoot != want {
+		t.Fatalf("provisioned root = %s, want %s", replicaRoot, want)
+	}
+
+	// Syncthing delivers the importer's archive files into the provisioned
+	// root. Simulate the delivery as a file copy; the .stfolder marker and
+	// .stignore already exist from provisioning. NO database file is copied —
+	// that is the invariant under test.
+	copyTree(t, filepath.Join(fixture, "export"), filepath.Join(replicaRoot, "export"))
+	for _, marker := range []string{".stfolder", ".stignore"} {
+		if _, err := os.Stat(filepath.Join(replicaRoot, marker)); err != nil {
+			t.Fatalf("provisioned root missing Syncthing artifact %s: %v", marker, err)
+		}
 	}
 
 	replicaSt, err := store.Open(filepath.Join(replicaData, "replica.sqlite"))
