@@ -44,6 +44,12 @@ type Enabler interface {
 	// returns its initial progress. A second Enable while one is in flight returns
 	// onboard.ErrJobInProgress and starts nothing.
 	Enable(src string) (onboard.Progress, error)
+	// Refresh re-runs the SAME export→incremental-import pipeline on an
+	// already-Enabled source, importing only the delta (SPEC-0013 REQ "Refresh").
+	// It shares Enable's per-source concurrency guard: a Refresh while an Enable or
+	// Refresh for src is in flight returns onboard.ErrJobInProgress and starts
+	// nothing.
+	Refresh(src string) (onboard.Progress, error)
 	// Status returns the current job progress for src, ok=false when none has run.
 	Status(src string) (onboard.Progress, bool)
 	// Cancel requests cancellation of src's in-flight job; true if one was running.

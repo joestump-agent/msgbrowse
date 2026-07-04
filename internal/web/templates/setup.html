@@ -49,6 +49,30 @@
       {{- end}}
     </ul>
 
+    {{/* All-sources Refresh (SPEC-0013 REQ "Refresh"): one control that refreshes
+         every Enabled source. Rendered only when at least one source is Enabled.
+         It POSTs /setup/refresh-all (same-origin + token gate, identical to the
+         per-source POSTs); the Runner's per-source job model starts one job per
+         distinct Enabled source, so it can never spawn two concurrent jobs for the
+         same source. Each source's own aria-live region reports its live state;
+         the summary lands in this control's own aria-live region. */}}
+    {{- if .AnyEnabled}}
+    <div class="setup-refresh-all">
+      {{- if .EnableAvailable}}
+      <button type="button" class="setup-btn"
+              hx-post="/setup/refresh-all"
+              hx-headers='{"X-Setup-Token": "{{.Token}}"}'
+              hx-target="#setup-refresh-all-result"
+              hx-swap="innerHTML"
+              hx-disabled-elt="this">Refresh all sources</button>
+      {{- else}}
+      <button type="button" class="setup-btn" disabled aria-disabled="true"
+              title="Refreshing needs the desktop app with its bundled exporters, or a configured exporter path">Refresh all sources</button>
+      {{- end}}
+      <p id="setup-refresh-all-result" class="setup-refresh-all-result" role="status" aria-live="polite"></p>
+    </div>
+    {{- end}}
+
     <p class="setup-footnote">
       {{- if .AnyActionable}}Detected sources can be enabled from here — enabling runs the bundled exporter and imports the result. Setup stays reachable from the sidebar at any time.
       {{- else}}No sources are ready to enable on this machine yet. Setup stays reachable from the sidebar at any time.{{end}}
@@ -78,6 +102,12 @@
           <div class="setup-card-actions">
             {{- if eq .State "enabled"}}
             <span class="setup-note setup-note-ok">{{template "icon-check" $}} Imported</span>
+            {{/* Refresh re-runs export + incremental import for this source so only
+                 new messages land (SPEC-0013 REQ "Refresh"). It POSTs /setup/refresh
+                 (same-origin + token gate, identical to Enable) and targets this
+                 card's own progress region, so it shares the aria-live surface and
+                 the Done sidebar-refresh with Enable. */}}
+            {{template "setup-refresh-button" .}}
             {{- else if eq .State "needs-permission"}}
             {{/* Detect-and-guide only (ADR-0020): the guidance modal names the exact
                  grant, deep-links the exact System Settings pane, and offers Recheck.
@@ -97,10 +127,12 @@
           {{- if eq .State "needs-permission"}}
           {{template "setup_guide_modal" .}}
           {{- end}}
-          {{- if or (eq .State "ready") (eq .State "needs-permission")}}
-          {{/* Per-source live progress region: the Enable POST targets it, and the
+          {{- if or (eq .State "ready") (eq .State "needs-permission") (eq .State "enabled")}}
+          {{/* Per-source live progress region: the Enable POST (Ready /
+               Needs-permission) or the Refresh POST (Enabled) targets it, and the
                returned fragment self-polls until a terminal phase (SPEC-0013
-               §Accessibility aria-live). */}}
+               §Accessibility aria-live). Present on Enabled cards too so a Refresh
+               has an aria-live surface to report the delta into. */}}
           <div id="setup-progress-{{.Source}}" class="setup-progress" role="status" aria-live="polite"></div>
           {{- end}}
         </div>
@@ -180,6 +212,30 @@
   {{- end}}
 {{end}}
 
+{{/* setup-refresh-button takes the whole card (it carries EnableAvailable +
+     Token + Source): a live Refresh button on an Enabled card when an Enabler is
+     wired, a disabled placeholder otherwise. It POSTs /setup/refresh (same-origin
+     + token gate) and targets this source's own progress region, so a Refresh
+     re-uses the exact aria-live surface + Done sidebar-refresh Enable uses.
+     Delta-only is guaranteed by the incremental importer (SPEC-0013 REQ
+     "Refresh"). */}}
+{{define "setup-refresh-button"}}
+  {{- if .EnableAvailable}}
+  <button type="button" class="setup-btn setup-btn-ghost"
+          hx-post="/setup/refresh"
+          hx-vals='{"source": "{{.Source}}"}'
+          hx-headers='{"X-Setup-Token": "{{.Token}}"}'
+          hx-target="#setup-progress-{{.Source}}"
+          hx-swap="innerHTML"
+          hx-disabled-elt="this"
+          aria-label="Refresh {{.Label}}">Refresh</button>
+  {{- else}}
+  <button type="button" class="setup-btn setup-btn-ghost" disabled aria-disabled="true"
+          title="Refreshing needs the desktop app with its bundled exporters, or a configured exporter path"
+          aria-label="Refresh {{.Label}}">Refresh</button>
+  {{- end}}
+{{end}}
+
 {{/* setup_progress is the htmx-swapped job-state fragment for one source. While
      the job is Active it self-schedules the next poll of /setup/status/<source>
      (hx-trigger="every 1s") and swaps itself, so the aria-live region announces
@@ -214,5 +270,22 @@
     {{- end}}
   </div>
   {{- if .Done}}{{.SidebarOOB}}{{end}}
+  {{- end}}
+{{end}}
+
+{{/* setup_refresh_all_result is the summary fragment the all-sources Refresh POST
+     swaps into its aria-live region. It reports how many sources it kicked off —
+     the per-source live state is announced by each card's own progress region, so
+     this stays a short count-only summary. All values are server-computed counts,
+     so html/template escaping is the only encoding needed. */}}
+{{define "setup_refresh_all_result"}}
+  {{- if .Unavailable}}
+  <span class="setup-progress-unavailable">Refreshing needs the desktop app (bundled exporters) or a configured exporter path.</span>
+  {{- else if .None}}
+  <span>No enabled sources to refresh.</span>
+  {{- else}}
+  <span>Refreshing {{.Started}} source{{if ne .Started 1}}s{{end}}
+    {{- if .AlreadyRunning}} · {{.AlreadyRunning}} already in progress{{end}}
+    {{- if .Failed}} · {{.Failed}} could not start{{end}} — see each source below for progress.</span>
   {{- end}}
 {{end}}

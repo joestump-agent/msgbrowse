@@ -107,6 +107,10 @@ type setupData struct {
 	// so the intro can nudge the user toward an action (vs. a pure returning-user
 	// view where everything is Enabled/Not-detected).
 	AnyActionable bool
+	// AnyEnabled is true when at least one source is Enabled, so the page renders
+	// the all-sources Refresh control (SPEC-0013 REQ "Refresh": "a single control
+	// that refreshes every enabled source"). Hidden when nothing is Enabled.
+	AnyEnabled bool
 	// EnableAvailable reports whether an Enabler is wired (desktop bundle or a
 	// configured $PATH resolver): true renders live Enable buttons, false renders
 	// the "desktop app required / configure tools" affordance (SPEC-0013).
@@ -149,16 +153,20 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	cards := s.setupCards(token)
 	anyActionable := false
+	anyEnabled := false
 	for _, c := range cards {
 		if c.Actionable {
 			anyActionable = true
-			break
+		}
+		if c.State == setupStateEnabled {
+			anyEnabled = true
 		}
 	}
 	s.render(w, r, "setup", setupData{
 		baseData:        base,
 		Cards:           cards,
 		AnyActionable:   anyActionable,
+		AnyEnabled:      anyEnabled,
 		EnableAvailable: s.enableAvailable(),
 		Token:           token,
 	})

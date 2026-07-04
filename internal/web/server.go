@@ -193,6 +193,8 @@ func (s *Server) routes() http.Handler {
 	// Privileged Setup POSTs (SPEC-0013 §Security): each is gated inside its
 	// handler by the same-origin + per-session-token check before any work.
 	mux.HandleFunc("POST /setup/enable", s.handleSetupEnable)
+	mux.HandleFunc("POST /setup/refresh", s.handleSetupRefresh)
+	mux.HandleFunc("POST /setup/refresh-all", s.handleSetupRefreshAll)
 	mux.HandleFunc("POST /setup/cancel", s.handleSetupCancel)
 	mux.HandleFunc("POST /setup/recheck", s.handleSetupRecheck)
 	mux.HandleFunc("GET /setup/status/{source}", s.handleSetupStatus)

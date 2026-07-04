@@ -310,6 +310,10 @@ func TestBuiltCSSCarriesSetupComponents(t *testing.T) {
 		".setup-guide-steps",
 		".setup-guide-result",
 		".setup-guide-close:focus-visible", // keyboard focus on the close control
+		// All-sources Refresh control (#135): the drift guard must carry the new
+		// classes so a stale app.css cannot ship the refresh control unstyled.
+		".setup-refresh-all",
+		".setup-refresh-all-result",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("built app.css missing %q (rebuild: rm -rf .tools && make css)", want)

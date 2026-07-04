@@ -1,11 +1,12 @@
 // Same-origin + per-session-token protection for the privileged Setup POSTs
 // (SPEC-0013 §Security "Same-origin protection for privileged POSTs"). The
 // read-only /setup GET renders detection cards under the ADR-0010 loopback
-// single-user trust and needs no token; but /setup/enable (and, built here so
-// #135's /setup/refresh + /setup/recheck reuse it) spawns a bundled exporter
-// that reads a personal database — a privileged local action that MUST NOT be
-// triggerable cross-origin, even under loopback, because another local process
-// or a malicious page loaded in a browser could otherwise drive the exporter.
+// single-user trust and needs no token; but /setup/enable (and /setup/refresh,
+// /setup/refresh-all, /setup/recheck, which reuse this gate) spawns a bundled
+// exporter that reads a personal database — a privileged local action that MUST
+// NOT be triggerable cross-origin, even under loopback, because another local
+// process or a malicious page loaded in a browser could otherwise drive the
+// exporter.
 //
 // The gate requires BOTH, and rejects with 403 BEFORE any subprocess starts:
 //
@@ -28,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 )
 
 // setupTokenField is the form field / header name the minted per-session token
@@ -44,50 +46,131 @@ const (
 // body before processing.
 const setupBodyLimit = 4 << 10 // 4 KiB
 
-// setupTokens is the server's live set of valid per-session Setup tokens. A
-// token is minted each time /setup is rendered and remembered here until the
-// process exits; the set is small (one per page view) and single-user, so it is
-// never evicted — the loopback single-user model has no adversary hoarding
-// tokens, and the process is short-lived per SPEC-0010's ephemeral-port design.
-// Access is synchronized because handlers run concurrently.
+// setupTokenTTL bounds how long a minted per-session Setup token stays valid. A
+// token is minted at /setup render and submitted with the follow-on privileged
+// POST; a real user acts within seconds-to-minutes, so an hour is generous
+// headroom while still expiring stale tokens (#135 hardening). Expiry is the
+// primary bound on the set's size for a long-lived `serve` process.
+const setupTokenTTL = time.Hour
+
+// setupTokenCap is the hard ceiling on the live token set, so even a burst of
+// /setup renders within the TTL window cannot grow it without bound. When mint
+// would exceed the cap it first drops expired tokens, then evicts the oldest
+// remaining — bounding both memory and the O(n) constant-time scan in valid()
+// (#135 hardening). The cap is generous: it only bites under thousands of renders
+// inside one TTL window, which the single-user loopback model never reaches
+// legitimately.
+const setupTokenCap = 1024
+
+// setupToken is one minted token with its expiry, so valid() can reject a stale
+// token and mint()/valid() can evict expired entries.
+type setupToken struct {
+	expires time.Time
+}
+
+// setupTokens is the server's live set of valid per-session Setup tokens. A token
+// is minted each time /setup is rendered and remembered here until it expires
+// (setupTokenTTL) or is evicted to hold the set under setupTokenCap. This keeps a
+// very long-lived `serve` process from accumulating unbounded tokens and linearly
+// slowing the constant-time valid() scan, while preserving the security
+// properties: tokens are unguessable (256-bit crypto/rand), compared in constant
+// time, and only ever minted at render. Access is synchronized because handlers
+// run concurrently.
+//
+// now is injectable so the eviction/expiry behavior is testable without sleeping;
+// it defaults to time.Now.
 type setupTokens struct {
 	mu     sync.Mutex
-	tokens map[string]struct{}
+	tokens map[string]setupToken
+	now    func() time.Time
 }
 
 func newSetupTokens() *setupTokens {
-	return &setupTokens{tokens: make(map[string]struct{})}
+	return &setupTokens{tokens: make(map[string]setupToken), now: time.Now}
 }
 
-// mint generates a fresh 256-bit random token, records it as valid, and returns
-// its hex string for embedding in the rendered Setup page.
+// mint generates a fresh 256-bit random token, records it with a TTL expiry, and
+// returns its hex string for embedding in the rendered Setup page. Before
+// inserting it prunes expired tokens; if the set is still at the cap it evicts the
+// single oldest token, so the set is bounded regardless of render volume.
 func (s *setupTokens) mint() (string, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
 	tok := hex.EncodeToString(b[:])
+
 	s.mu.Lock()
-	s.tokens[tok] = struct{}{}
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	now := s.now()
+	s.pruneExpiredLocked(now)
+	if len(s.tokens) >= setupTokenCap {
+		s.evictOldestLocked()
+	}
+	s.tokens[tok] = setupToken{expires: now.Add(setupTokenTTL)}
 	return tok, nil
 }
 
-// valid reports whether tok is a live minted token, using a constant-time
-// compare against each candidate so a rejected token leaks no timing signal.
-// (The set is tiny — one entry per page render — so the linear scan is cheap.)
+// valid reports whether tok is a live, unexpired minted token, using a
+// constant-time compare against each candidate so a rejected token leaks no
+// timing signal. It prunes expired tokens as it scans, so the set does not carry
+// dead entries between mints. A token that matches but is expired is rejected.
 func (s *setupTokens) valid(tok string) bool {
 	if tok == "" {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for known := range s.tokens {
+	now := s.now()
+	match := false
+	for known, meta := range s.tokens {
+		if now.After(meta.expires) {
+			// Opportunistically drop the expired entry; deleting during range is
+			// safe in Go and keeps the set from carrying dead tokens.
+			delete(s.tokens, known)
+			continue
+		}
+		// Constant-time compare on every live candidate — do NOT break early on a
+		// match, so the scan cost does not depend on which token matched (no timing
+		// signal). We still finish pruning the remaining entries.
 		if subtle.ConstantTimeCompare([]byte(known), []byte(tok)) == 1 {
-			return true
+			match = true
 		}
 	}
-	return false
+	return match
+}
+
+// pruneExpiredLocked drops every token whose TTL has passed. Caller holds mu.
+func (s *setupTokens) pruneExpiredLocked(now time.Time) {
+	for tok, meta := range s.tokens {
+		if now.After(meta.expires) {
+			delete(s.tokens, tok)
+		}
+	}
+}
+
+// evictOldestLocked removes the single token with the earliest expiry (the oldest
+// mint, since every token shares the same TTL) so mint can insert under the cap.
+// Caller holds mu and has already pruned expired entries.
+func (s *setupTokens) evictOldestLocked() {
+	var oldestTok string
+	var oldestExp time.Time
+	first := true
+	for tok, meta := range s.tokens {
+		if first || meta.expires.Before(oldestExp) {
+			oldestTok, oldestExp, first = tok, meta.expires, false
+		}
+	}
+	if !first {
+		delete(s.tokens, oldestTok)
+	}
+}
+
+// size reports the number of live tokens currently held (for tests).
+func (s *setupTokens) size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.tokens)
 }
 
 // checkSetupPOST enforces the same-origin + token gate on a privileged Setup

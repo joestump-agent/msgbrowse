@@ -18,11 +18,14 @@ import (
 // (the SPEC-0013 §Security "MUST NOT start any subprocess" guarantee), and lets
 // a test script the progress a Status/Enable returns.
 type fakeEnabler struct {
-	mu        sync.Mutex
-	enables   int32 // atomic: number of Enable calls
-	cancels   int32
-	progress  onboard.Progress
-	enableErr error
+	mu         sync.Mutex
+	enables    int32 // atomic: number of Enable calls
+	refreshes  int32 // atomic: number of Refresh calls
+	refreshSrc []string
+	cancels    int32
+	progress   onboard.Progress
+	enableErr  error
+	refreshErr error
 }
 
 func (f *fakeEnabler) Enable(src string) (onboard.Progress, error) {
@@ -36,6 +39,23 @@ func (f *fakeEnabler) Enable(src string) (onboard.Progress, error) {
 		p.Message = "Exporting…"
 	}
 	return p, f.enableErr
+}
+
+// Refresh records each call (and the source) so the refresh security tests can
+// assert a rejected POST started NO job, and the all-sources test can assert one
+// job per Enabled source. It mirrors Enable's progress shaping.
+func (f *fakeEnabler) Refresh(src string) (onboard.Progress, error) {
+	atomic.AddInt32(&f.refreshes, 1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refreshSrc = append(f.refreshSrc, src)
+	p := f.progress
+	p.Source = src
+	if p.Phase == "" {
+		p.Phase = onboard.PhaseExporting
+		p.Message = "Refreshing…"
+	}
+	return p, f.refreshErr
 }
 
 func (f *fakeEnabler) Status(src string) (onboard.Progress, bool) {
@@ -54,7 +74,15 @@ func (f *fakeEnabler) Cancel(src string) bool {
 	return true
 }
 
-func (f *fakeEnabler) enableCount() int32 { return atomic.LoadInt32(&f.enables) }
+func (f *fakeEnabler) enableCount() int32  { return atomic.LoadInt32(&f.enables) }
+func (f *fakeEnabler) refreshCount() int32 { return atomic.LoadInt32(&f.refreshes) }
+
+// refreshedSources returns the sources Refresh was called for, in call order.
+func (f *fakeEnabler) refreshedSources() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.refreshSrc...)
+}
 
 // mintToken renders /setup and extracts a live per-session token by minting one
 // directly against the server's token set — the same set the handler mints from

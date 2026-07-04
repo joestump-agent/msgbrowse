@@ -1695,6 +1695,24 @@ html {
   color: color-mix(in oklab, var(--color-base-content) 48%, transparent);
 }
 
+/* All-sources Refresh control (SPEC-0013 REQ "Refresh"): a single button that
+   fans a refresh out across every Enabled source, with its own aria-live summary
+   region beside it. Rendered only when at least one source is Enabled. */
+.setup-refresh-all {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+.setup-refresh-all-result {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: color-mix(in oklab, var(--color-base-content) 62%, transparent);
+}
+.setup-refresh-all-result:empty {
+  display: none;
+}
+
 /* Live Enable job progress (SPEC-0013 REQ "One-click enable and import"): a
    per-source aria-live region the Enable POST fills and the status poller swaps.
    State is carried as TEXT (the message line + phase color), never spinner-only

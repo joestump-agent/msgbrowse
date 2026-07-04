@@ -62,6 +62,25 @@ func (p Progress) ErrText() string {
 	return p.Err.Error()
 }
 
+// jobMode distinguishes the two callers of the identical export→adopt→import
+// pipeline: an initial Enable of a Ready source, or a Refresh of an
+// already-Enabled source (SPEC-0013 REQ "Refresh"). The pipeline is byte-for-byte
+// the same — the import is incremental and idempotent, so a Refresh naturally
+// adds only the delta — and mode only steers the human-readable phase labels and
+// the terminal "Enabled X" vs "Refreshed X" message. Keeping it a mode rather
+// than a forked pipeline is the point: Refresh reuses the same staging, atomic
+// adopt, cancellation, and concurrency guard as Enable, so the two can never
+// diverge.
+type jobMode int
+
+const (
+	// modeEnable is the first-time Enable of a Ready source.
+	modeEnable jobMode = iota
+	// modeRefresh re-runs the pipeline on an already-Enabled source, importing
+	// only the delta.
+	modeRefresh
+)
+
 // job is one supervised worker's live state. It is owned by the Runner and only
 // ever mutated under the Runner's mutex; the running goroutine publishes updates
 // through Runner.update, never by touching this struct directly.
@@ -155,6 +174,28 @@ func NewRunner(cfg Config) (*Runner, error) {
 // layer already constrains the source to the fixed enum, but the runner guards
 // too so no client string can drive a filesystem path.
 func (r *Runner) Enable(src string) (Progress, error) {
+	return r.start(src, modeEnable)
+}
+
+// Refresh re-runs the SAME export→adopt→import pipeline on an already-Enabled
+// source (SPEC-0013 REQ "Refresh"). It is the entry point the /setup/refresh
+// handler calls. Because the import is incremental and idempotent, re-running the
+// pipeline adds only the messages that arrived since the last import — there is
+// no separate "refresh" code path, only a distinct terminal label. It shares the
+// per-source concurrency guard with Enable through start(), so a Refresh while an
+// Enable (or another Refresh) for the same source is in flight returns
+// ErrJobInProgress and spawns no duplicate exporter (SPEC-0013 REQ "Concurrency
+// Safety": "a second Enable/Refresh while one is in flight MUST be rejected").
+func (r *Runner) Refresh(src string) (Progress, error) {
+	return r.start(src, modeRefresh)
+}
+
+// start registers and launches a supervised job for src in the given mode. It is
+// the shared body behind Enable and Refresh — one concurrency guard, one job
+// registry, one goroutine lifecycle — so the two entry points cannot drift in
+// their concurrency or teardown semantics; they differ only in the phase labels
+// execute renders for the mode.
+func (r *Runner) start(src string, mode jobMode) (Progress, error) {
 	if !source.IsKnown(src) {
 		return Progress{}, fmt.Errorf("%w: %q", ErrUnknownSource, src)
 	}
@@ -191,7 +232,7 @@ func (r *Runner) Enable(src string) (Progress, error) {
 	go func() {
 		defer r.wg.Done()
 		defer cancel()
-		r.execute(jobCtx, src)
+		r.execute(jobCtx, src, mode)
 	}()
 
 	// Return the captured initial snapshot (a value copy taken under the lock),
@@ -255,13 +296,15 @@ func (r *Runner) update(src string, phase Phase, msg string, res ImportResult, e
 	j.progress.UpdatedAt = time.Now()
 }
 
-// execute runs the full Enable pipeline for a source under jobCtx: resolve tool
-// → probe permission → export into staging → adopt → import. Every step checks
-// for cancellation, and any failure records a terminal PhaseFailed/PhaseCancelled
-// with a sentinel-wrapped error and discards staging so the managed root is
-// untouched. It never panics out to the goroutine (a panic would leave the job
-// non-terminal); all exits publish a terminal phase.
-func (r *Runner) execute(jobCtx context.Context, src string) {
+// execute runs the full pipeline for a source under jobCtx: resolve tool → probe
+// permission → export into staging → adopt → import. It backs BOTH Enable and
+// Refresh (mode) — the steps are identical because a Refresh is just the same
+// pipeline over the already-Enabled source, and the incremental importer adds
+// only the delta. Every step checks for cancellation, and any failure records a
+// terminal PhaseFailed/PhaseCancelled with a sentinel-wrapped error and discards
+// staging so the managed root is untouched. It never panics out to the goroutine
+// (a panic would leave the job non-terminal); all exits publish a terminal phase.
+func (r *Runner) execute(jobCtx context.Context, src string, mode jobMode) {
 	// managedRoot is app-computed from the fixed source enum — never client input.
 	managedRoot, err := setup.ManagedRoot(r.dataDir, src)
 	if err != nil {
@@ -354,10 +397,21 @@ func (r *Runner) execute(jobCtx context.Context, src string) {
 		return
 	}
 
+	// The terminal message is the only mode-specific text: an Enable reports the
+	// source is now live ("Enabled Signal — …"); a Refresh reports the delta it
+	// just added ("Refreshed Signal — …"). Both carry the same counts so the
+	// aria-live region announces exactly what changed (SPEC-0013 REQ "Refresh":
+	// "reports the number of new conversations/messages").
+	verb := "Enabled"
+	logMsg := "onboard enable complete"
+	if mode == modeRefresh {
+		verb = "Refreshed"
+		logMsg = "onboard refresh complete"
+	}
 	r.update(src, PhaseDone,
-		fmt.Sprintf("Enabled %s — %d conversations, %d messages added", source.Label(src), res.ConversationsChanged, res.MessagesAdded),
+		fmt.Sprintf("%s %s — %d conversations, %d messages added", verb, source.Label(src), res.ConversationsChanged, res.MessagesAdded),
 		res, nil)
-	r.log.Info("onboard enable complete", "source", src,
+	r.log.Info(logMsg, "source", src,
 		"conversations_changed", res.ConversationsChanged, "messages_added", res.MessagesAdded)
 }
 
