@@ -463,9 +463,10 @@ func pickLoopbackAddr() (string, error) {
 }
 
 // lineLogger adapts a child stream to structured logging, splitting on
-// newlines and flushing any trailing partial line on process exit via the
-// final Write of the exec copier. One instance per stream; exec.Cmd
-// serializes writes per stream.
+// newlines. Syncthing terminates every log line, so buffered partials only
+// exist between writes; a final unterminated fragment at process death is
+// retained but not emitted (acceptable: it cannot be a complete message).
+// One instance per stream; exec.Cmd serializes writes per stream.
 type lineLogger struct {
 	log    *slog.Logger
 	stream string
