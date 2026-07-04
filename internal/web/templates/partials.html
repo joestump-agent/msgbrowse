@@ -5,11 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="/static/app.css">
-  {{/* theme.js runs before paint to apply the saved theme (no FOUC); both are
+  {{/* theme.js runs before paint to apply the saved theme (no FOUC); all are
        self-hosted so they load under script-src 'self'. sidebar.js powers the
-       live "Filter conversations" box (CSP-safe, deferred, no inline handlers). */}}
+       live "Filter conversations" box; copy.js powers the Settings page's copy
+       buttons via document-level delegation (both CSP-safe, deferred, no
+       inline handlers). */}}
   <script src="/static/theme.js"></script>
   <script src="/static/sidebar.js" defer></script>
+  <script src="/static/copy.js" defer></script>
   <script src="/static/htmx.min.js" defer></script>
 </head>
 <body class="bg-base-100 text-base-content">
@@ -63,6 +66,7 @@
         <a href="/search" class="sidebar-link">{{template "icon-search" .}} <span>Search</span></a>
         <a href="/gallery" class="sidebar-link">{{template "icon-photo" .}} <span>Media</span></a>
         <a href="/status" class="sidebar-link">{{template "icon-server" .}} <span>Status &amp; backups</span></a>
+        <a href="/settings" class="sidebar-link">{{template "icon-settings" .}} <span>Settings</span></a>
       </nav>
       {{/* PINNED section (REQ-0006-010): pinned conversations float above the
            CONVERSATIONS list, using the SAME row markup. Rendered only when at

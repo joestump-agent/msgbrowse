@@ -1436,6 +1436,92 @@ html {
   border-color: color-mix(in oklab, var(--color-error) 35%, transparent);
 }
 
+/* --- Settings: Connect page (SPEC-0010 §Connect/Settings, issue #100) ----
+ * Copyable connection blocks (endpoint URL / JSON config / claude mcp add /
+ * manual pairing code) and the server-rendered pairing QR. Cards reuse
+ * .status-card; labels reuse .eyebrow; the pieces below are the copy-block
+ * plumbing and the QR panel. Colors ride the slate theme variables, so the
+ * slate-light variant restyles automatically (ADR-0012). */
+
+/* Bordered mono block with an icon-only copy button pinned to its corner. */
+.copy-block {
+  position: relative;
+  border: 1px solid var(--color-neutral);
+  border-radius: 0.5rem;
+  background: var(--color-base-100);
+}
+.copy-pre {
+  margin: 0;
+  /* Right padding clears the pinned copy button so no text hides under it. */
+  padding: 0.65rem 3rem 0.65rem 0.85rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto; /* wide values (JSON, pairing code) scroll, never overflow */
+  color: color-mix(in oklab, var(--color-base-content) 88%, transparent);
+}
+.copy-btn {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 1px solid var(--color-neutral);
+  border-radius: 0.45rem;
+  background: var(--color-base-200);
+  color: color-mix(in oklab, var(--color-base-content) 65%, transparent);
+  cursor: pointer;
+  @media (prefers-reduced-motion: no-preference) {
+    transition: background-color 0.12s ease, color 0.12s ease;
+  }
+}
+.copy-btn:hover {
+  background: color-mix(in oklab, var(--color-primary) 10%, var(--color-base-200));
+  color: var(--color-base-content);
+}
+/* Visible keyboard focus (SPEC-0010 §Accessibility "Keyboard navigation"). */
+.copy-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+/* Copied acknowledgment: swap the copy glyph for a success check for a couple
+   of seconds (copy.js toggles .copied). The aria-live announcement carries the
+   same news to assistive tech — the icon swap is never the only signal. */
+.copy-btn .icon-check {
+  display: none;
+}
+.copy-btn.copied .icon-copy {
+  display: none;
+}
+.copy-btn.copied .icon-check {
+  display: inline-flex;
+  color: var(--color-success);
+}
+
+/* QR + manual-code panel: image beside the text column, stacking on narrow
+   viewports. */
+.qr-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.1rem;
+  align-items: flex-start;
+}
+/* The PNG carries its own white quiet zone; keep edges crisp when scaled. */
+.qr-img {
+  flex-shrink: 0;
+  border: 1px solid var(--color-neutral);
+  border-radius: 0.5rem;
+  image-rendering: pixelated;
+}
+.qr-panel-text {
+  flex: 1 1 16rem;
+}
+
 /* Boosted navigation swaps #main-content and htmx scrolls its top into view;
    offset the 54px sticky navbar so page headings are never covered. */
 #main-content {

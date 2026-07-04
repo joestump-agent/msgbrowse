@@ -69,6 +69,13 @@ type Server struct {
 	log        *slog.Logger
 	mux        http.Handler
 	staticTags map[string]string // embedded-static ETags, keyed by path within static/
+
+	// deviceSyncEnabled mirrors config device_sync.enabled for the /settings
+	// pairing section's absent state (SPEC-0010; payload contract SPEC-0011).
+	deviceSyncEnabled bool
+	// pairing is the live pairing-window source for /settings' QR section;
+	// nil until the device-sync listener story wires SetPairingSource.
+	pairing PairingSource
 }
 
 // NewServer constructs a Server, parsing templates and wiring routes.
@@ -83,8 +90,9 @@ func NewServer(st Store, cfg *config.Config, log *slog.Logger) (*Server, error) 
 			IMessage: cfg.IMessageArchiveRoot,
 			WhatsApp: cfg.WhatsAppArchiveRoot,
 		},
-		derivedDir: imageconv.DerivedDir(cfg.DataDir),
-		log:        log,
+		derivedDir:        imageconv.DerivedDir(cfg.DataDir),
+		log:               log,
+		deviceSyncEnabled: cfg.DeviceSync.Enabled,
 	}
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"renderBody":       renderBody,
@@ -165,6 +173,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /c/{id}/messages", s.handleMessages)
 	mux.HandleFunc("GET /c/{id}/at/{mid}", s.handleConversationAt)
 	mux.HandleFunc("GET /status", s.handleStatus)
+	mux.HandleFunc("GET /settings", s.handleSettings)
 	mux.HandleFunc("GET /media/{id}/{path...}", s.handleMedia)
 
 	return gzipMiddleware(securityHeaders(mux))
