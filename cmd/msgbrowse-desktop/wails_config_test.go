@@ -1,9 +1,9 @@
 // Guard tests for wails.json, the Wails CLI project config the desktop CI
 // packaging matrix builds from (SPEC-0010 REQ "Release packaging via CI
 // matrix", .github/workflows/desktop.yml). The matrix's artifact paths are
-// derived from the output filename here — build/bin/msgbrowse-desktop on
-// Linux, build/bin/msgbrowse-desktop.app on macOS — so a rename in one place
-// but not the other must fail fast, headless, with CGO_ENABLED=0.
+// derived from the name/output filename here — build/bin/msgbrowse on Linux,
+// build/bin/msgbrowse.app on macOS — so a rename in one place but not the
+// other must fail fast, headless, with CGO_ENABLED=0.
 //
 // Deliberately untagged (no `desktop` build tag): `make desktop-test` runs it
 // on every platform without a webview toolchain.
@@ -31,9 +31,10 @@ func TestWailsConfigMatchesCIMatrix(t *testing.T) {
 		t.Fatalf("wails.json is not valid JSON: %v", err)
 	}
 
-	// The CI matrix zips build/bin/msgbrowse-desktop.app (darwin) and uploads
-	// build/bin/msgbrowse-desktop (linux); both names flow from these fields.
-	const want = "msgbrowse-desktop"
+	// The CI matrix zips build/bin/msgbrowse.app (darwin) and uploads
+	// build/bin/msgbrowse (linux); both names flow from these fields. The app
+	// is named `msgbrowse` — the same product as the CLI, in a native window.
+	const want = "msgbrowse"
 	if cfg.Name != want {
 		t.Errorf("wails.json name = %q, want %q (the darwin .app bundle is <name>.app)", cfg.Name, want)
 	}

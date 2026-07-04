@@ -78,7 +78,7 @@ jobs:
       # ditto preserves the bundle's permissions and structure; zipping before
       # upload also keeps them through actions/upload-artifact's own zip.
       - name: Zip the .app bundle
-        run: ditto -c -k --keepParent build/bin/msgbrowse-desktop.app msgbrowse-desktop_darwin_universal.zip
+        run: ditto -c -k --keepParent build/bin/msgbrowse.app msgbrowse-desktop_darwin_universal.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -117,6 +117,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: msgbrowse-desktop_linux_amd64
-          path: bin/msgbrowse-desktop
+          path: cmd/msgbrowse-desktop/build/bin/msgbrowse
           retention-days: 30
           if-no-files-found: error

@@ -49,7 +49,11 @@ export CGO_ENABLED = 0
 # `webkit2_41` links webkit2gtk-4.1 (Ubuntu 24.04+); on distros still shipping
 # webkit2gtk-4.0, override: make desktop-linux DESKTOP_TAGS=desktop,production
 DESKTOP_DIR  := cmd/msgbrowse-desktop
-DESKTOP_BIN  := msgbrowse-desktop
+# The desktop app is named `msgbrowse` (same product, native window). It builds
+# into the module's own build/bin/ — alongside where `wails build` writes the
+# macOS msgbrowse.app — so it never clobbers the pure-Go CLI at bin/msgbrowse.
+DESKTOP_BIN  := msgbrowse
+DESKTOP_OUT  := build/bin/$(DESKTOP_BIN)
 DESKTOP_TAGS ?= desktop,production,webkit2_41
 
 .PHONY: all build install run test cover check fmt fmt-check vet tidy clean clean-tools css up up-bundled down logs signal-import embed journal desktop-linux desktop-test
@@ -86,8 +90,8 @@ tidy: ## Tidy go.mod/go.sum
 
 check: fmt-check vet test ## CI gate: format check, vet, tests
 
-desktop-linux: ## Build the Linux desktop shell into ./bin (cgo; needs GTK3/WebKit2GTK dev packages)
-	cd $(DESKTOP_DIR) && CGO_ENABLED=1 $(GO) build -tags $(DESKTOP_TAGS) -o ../../$(BIN_DIR)/$(DESKTOP_BIN) .
+desktop-linux: ## Build the Linux desktop app to cmd/msgbrowse-desktop/build/bin/msgbrowse (cgo; needs GTK3/WebKit2GTK dev packages)
+	cd $(DESKTOP_DIR) && CGO_ENABLED=1 $(GO) build -tags $(DESKTOP_TAGS) -o $(DESKTOP_OUT) .
 
 desktop-test: ## Run the desktop module's headless tests (pure Go; no webview toolchain needed)
 	cd $(DESKTOP_DIR) && $(GO) test ./...

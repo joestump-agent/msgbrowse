@@ -150,7 +150,8 @@ host loopback only.
 
 ## Desktop app
 
-msgbrowse also ships as a native desktop app (`msgbrowse-desktop`): a
+msgbrowse also ships as a native desktop app (the `msgbrowse` app — same
+product, native window): a
 [Wails v2](https://wails.io) window over the exact same embedded web server —
 same pages, same handlers, zero divergence from `msgbrowse serve`. Webview
 shells can't be cross-compiled, so per-OS artifacts are built by a CI matrix
@@ -165,13 +166,13 @@ universal arm64+Intel `.app`). Because the app is unsigned, Gatekeeper blocks
 the first launch. On macOS 15 (Sequoia) and later the old right-click → Open
 trick no longer works — instead either:
 
-- **Terminal (fastest):** `xattr -dr com.apple.quarantine msgbrowse-desktop.app`, then open it normally; or
-- **GUI:** double-click (it gets blocked), then System Settings → **Privacy & Security** → scroll to Security → **Open Anyway** next to the msgbrowse-desktop notice → authenticate.
+- **Terminal (fastest):** `xattr -dr com.apple.quarantine msgbrowse.app`, then open it normally; or
+- **GUI:** double-click (it gets blocked), then System Settings → **Privacy & Security** → scroll to Security → **Open Anyway** next to the msgbrowse notice → authenticate.
 
 Either grant is one-time; afterward it launches with a normal double-click.
 
 **Linux** — download `msgbrowse-desktop_linux_amd64` and
-`chmod +x msgbrowse-desktop` (artifact zips don't preserve the execute bit).
+`chmod +x msgbrowse` (artifact zips don't preserve the execute bit).
 The binary links the system webview, so the WebKit2GTK runtime must be
 installed (Ubuntu 24.04+ / Debian 13:
 `sudo apt-get install libgtk-3-0 libwebkit2gtk-4.1-0`; most GNOME desktops
@@ -393,7 +394,7 @@ make check      # gofmt + go vet + tests (the CI gate)
 make cover      # coverage summary
 make css        # rebuild internal/web/static/app.css (Tailwind + daisyUI)
 
-make desktop-linux  # build ./bin/msgbrowse-desktop (cgo; needs GTK3/WebKit2GTK dev packages)
+make desktop-linux  # build cmd/msgbrowse-desktop/build/bin/msgbrowse (cgo; needs GTK3/WebKit2GTK dev packages)
 make desktop-test   # desktop module's headless tests (pure Go, CGO_ENABLED=0)
 ```
 
