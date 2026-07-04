@@ -26,6 +26,31 @@
          hidden, updated by copy.js on every successful copy. */}}
     <p id="copy-announce" class="sr-only" aria-live="polite"></p>
 
+    {{/* Diagnostics: "Status & backups" moved here out of the primary sidebar nav
+         (it is a diagnostic destination, not a top-level one), and the Logs viewer
+         (issue #151) — the per-source exporter-log surface for a failed Enable /
+         Refresh — lives beside it. Both are plain links (no boost needed on the
+         settings body); the CSP is unaffected. */}}
+    <section class="status-card space-y-4" aria-labelledby="settings-diagnostics-heading">
+      <h2 id="settings-diagnostics-heading" class="status-card-title">Diagnostics</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <a href="/status" class="link-card">
+          <span class="link-card-icon">{{template "icon-server" .}}</span>
+          <span class="min-w-0">
+            <span class="link-card-title block">Status &amp; backups</span>
+            <span class="link-card-sub block">Archive freshness &amp; snapshots</span>
+          </span>
+        </a>
+        <a href="/logs" class="link-card">
+          <span class="link-card-icon">{{template "icon-document" .}}</span>
+          <span class="min-w-0">
+            <span class="link-card-title block">Logs</span>
+            <span class="link-card-sub block">Exporter runs &amp; import results</span>
+          </span>
+        </a>
+      </div>
+    </section>
+
     <section class="status-card space-y-4" aria-labelledby="settings-mcp-heading">
       <h2 id="settings-mcp-heading" class="status-card-title">MCP server</h2>
       <p class="status-note">Point Claude Desktop or Claude Code at this archive over streamable HTTP.

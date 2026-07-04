@@ -166,6 +166,12 @@ func TestDetectWhatsAppContainerVariants(t *testing.T) {
 		if filepath.Base(det.Path) != whatsappDBName {
 			t.Errorf("path = %q, want it to end in %q", det.Path, whatsappDBName)
 		}
+		// MediaPath is the Message/Media dir beside the database, threaded into
+		// wtsexporter's iOS-mode `-m` argument (issue #150).
+		wantMedia := filepath.Join(filepath.Dir(det.Path), "Message", "Media")
+		if det.MediaPath != wantMedia {
+			t.Errorf("media path = %q, want %q (beside the database)", det.MediaPath, wantMedia)
+		}
 	})
 
 	t.Run("glob error degrades to not-detected", func(t *testing.T) {

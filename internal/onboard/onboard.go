@@ -141,11 +141,20 @@ func (f ToolResolverFunc) ResolveTool(ctx context.Context, src string) (string, 
 }
 
 // ExecRunner runs an exporter subprocess with an explicit argv and process
-// environment, and blocks until it exits. It is the seam that makes the whole
-// pipeline testable without the real macOS exporters: tests inject a fake that
-// writes a fixture archive into the staging dir and returns nil (or a scripted
-// error). Production wires it to a real exec.CommandContext runner (in the
+// environment, blocks until it exits, and returns the exporter's captured
+// combined stdout+stderr. It is the seam that makes the whole pipeline testable
+// without the real macOS exporters: tests inject a fake that writes a fixture
+// archive into the staging dir and returns "" (or a scripted error + the stderr
+// it "printed"). Production wires it to a real exec.CommandContext runner (in the
 // CLI/desktop layer, which owns the os/exec dependency).
+//
+// The returned string is the exporter's combined output, BOUNDED by the runner
+// (production caps it to a ring buffer — see onboardsvc.ExecRunner) so a chatty
+// exporter cannot grow it without limit; it is captured whether the run
+// succeeded or failed, so a non-zero exit's stderr — the diagnostic detail the
+// Logs viewer surfaces (issue #151) — is preserved rather than discarded. It is
+// TOOL output (argv echoes, progress, error text), never message content, and is
+// never persisted to disk.
 //
 // name is the resolved absolute tool path and args are app-owned constants plus
 // the app-computed staging path — never client input (SPEC-0013 §Security
@@ -155,7 +164,7 @@ func (f ToolResolverFunc) ResolveTool(ctx context.Context, src string) (string, 
 // relocation-corrected PYTHONHOME/PYTHONPATH env so it can find its stdlib after
 // the .app is moved (issue #147). The context MUST be honored so a Cancel kills
 // the subprocess.
-type ExecRunner func(ctx context.Context, name string, env []string, args ...string) error
+type ExecRunner func(ctx context.Context, name string, env []string, args ...string) (output string, err error)
 
 // EnvResolver is an OPTIONAL capability a ToolResolver may also implement to
 // supply the process environment a source's exporter subprocess must run with.
@@ -168,6 +177,47 @@ type ExecRunner func(ctx context.Context, name string, env []string, args ...str
 // it back to the specific tool without re-resolving.
 type EnvResolver interface {
 	EnvForTool(ctx context.Context, src, toolPath string) ([]string, error)
+}
+
+// ExportSource is the detected LIVE source location an exporter must read from,
+// for the sources whose exporter reads a specific database + media directory
+// rather than its own well-known application directory. It is resolved by the
+// SourceResolver seam and threaded into ExportArgs.
+//
+// Signal and iMessage leave it zero: sigexport reads Signal Desktop's own
+// application-support directory and imessage-exporter reads ~/Library/Messages/
+// chat.db, so neither needs an explicit source path. WhatsApp REQUIRES it: the
+// Mac app keeps its history in a live container database, and wtsexporter must
+// be pointed at it in iOS mode (`-i -d <DB> -m <media dir>`) or argparse exits 2
+// (issue #150). The paths are app-detected (internal/setup), never client input.
+type ExportSource struct {
+	// DBPath is the source's live database file (WhatsApp's ChatStorage.sqlite).
+	DBPath string
+	// MediaDir is the source's live media directory (WhatsApp's Message/Media),
+	// handed to wtsexporter's `-m`.
+	MediaDir string
+}
+
+// SourceResolver resolves the detected LIVE source location for a source whose
+// exporter reads a specific database + media directory (WhatsApp). It is an
+// OPTIONAL Runner seam: the desktop shell backs it with the real
+// internal/setup.Detector; tests inject a fake with faked paths; a resolver that
+// returns the zero ExportSource (or a nil resolver entirely) means "the exporter
+// reads its own well-known directory" (Signal/iMessage). This keeps the pure
+// onboard package off the detection internals while still threading the detected
+// WhatsApp container DB + media path into the export invocation (issue #150).
+type SourceResolver interface {
+	// ResolveSource returns the detected live source location for src. A source
+	// that needs no explicit path (Signal/iMessage) returns the zero value, nil.
+	ResolveSource(ctx context.Context, src string) (ExportSource, error)
+}
+
+// SourceResolverFunc adapts a plain func to SourceResolver.
+type SourceResolverFunc func(ctx context.Context, src string) (ExportSource, error)
+
+// ResolveSource implements SourceResolver.
+func (f SourceResolverFunc) ResolveSource(ctx context.Context, src string) (ExportSource, error) {
+	return f(ctx, src)
 }
 
 // Importer imports an adopted managed archive root for a source into the store
@@ -195,15 +245,23 @@ func (f ImporterFunc) Import(ctx context.Context, src, archiveRoot string) (Impo
 // ExportArgs builds the exporter argv for a source, writing into the given
 // destination directory. The destination is ALWAYS the app-computed staging dir
 // (never the managed root directly, and never a client path): the exporter runs
-// into staging and only a clean success is promoted. The flags mirror
-// internal/cli/export.go's proven command lines exactly (iMessage always copy-
-// mode `-c clone`; Signal writes into <dest>/export; WhatsApp writes JSON +
-// media into <dest>), so the desktop and CLI export layouts cannot diverge.
+// into staging and only a clean success is promoted. src is the detected LIVE
+// source location (the WhatsApp container DB + media dir); it is the zero value
+// for Signal/iMessage, whose exporters read their own well-known directories.
+//
+// The flags mirror internal/cli/export.go's proven command lines (iMessage
+// always copy-mode `-c clone`; Signal writes into <dest>/export) plus the
+// real-Mac WhatsApp iOS-mode invocation (issue #150): wtsexporter reads the live
+// container database in iOS mode — `-i -d <ChatStorage.sqlite> -m <media dir>` —
+// and writes JSON + copied media into <dest>. Without `-i -d`, wtsexporter's
+// argparse rejects the invocation with exit 2, which was the whole WhatsApp
+// Enable failure.
 //
 // This is the single place the argv is assembled, and it is assembled only from
-// app-owned constants + the tool path + the computed staging dir — no request
-// input reaches it (SPEC-0013 §Security "Subprocess argument safety").
-func ExportArgs(src, dest string) ([]string, error) {
+// app-owned constants + the computed staging dir + the app-DETECTED source paths
+// (internal/setup, never client input) — no request input reaches it (SPEC-0013
+// §Security "Subprocess argument safety").
+func ExportArgs(src, dest string, source_ ExportSource) ([]string, error) {
 	switch src {
 	case source.Signal:
 		// sigexport <dest>/export → <dest>/export/<conversation>/chat.md, the
@@ -215,13 +273,25 @@ func ExportArgs(src, dest string) ([]string, error) {
 		// references (the non-copy-mode trap doctor diagnoses).
 		return []string{"-f", "txt", "-c", "clone", "-o", dest}, nil
 	case source.WhatsApp:
-		// wtsexporter -o <dest> -j <dest>/result.json: the JSON export and copied
-		// media both land under <dest>, the layout internal/whatsapp scans. The
-		// platform/input flags (-i/-a, -b/-d/-k) are the user's backup specifics
-		// and are NOT part of the one-click Enable flow — a WhatsApp Enable that
-		// needs them surfaces an export error the UI shows (SPEC-0013 error
-		// handling), rather than guessing a backup location.
-		return []string{"-o", dest, "-j", whatsappResultFile(dest)}, nil
+		// wtsexporter iOS mode against the live container DB (issue #150). The Mac
+		// app has no on-disk backup for the CLI's `-b` path to read; its history is
+		// the live ChatStorage.sqlite in the group container, so the export MUST run
+		// `-i -d <DB> -m <media dir>`. `-o <dest>` + `-j <dest>/result.json` land the
+		// copied media and the JSON under <dest> (the layout internal/whatsapp
+		// scans); `--no-html` skips the HTML render the app never reads.
+		if source_.DBPath == "" {
+			// A WhatsApp Enable with no detected container DB cannot run iOS mode —
+			// surface a clear error rather than invoking wtsexporter without `-d`
+			// (which exits 2). The card is only actionable when Detected, so this is
+			// a guard, not the common path.
+			return nil, fmt.Errorf("%w: whatsapp: no ChatStorage.sqlite detected to export", ErrExportFailed)
+		}
+		args := []string{"-i", "-d", source_.DBPath}
+		if source_.MediaDir != "" {
+			args = append(args, "-m", source_.MediaDir)
+		}
+		args = append(args, "-o", dest, "-j", whatsappResultFile(dest), "--no-html")
+		return args, nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSource, src)
 	}

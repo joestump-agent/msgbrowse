@@ -1,0 +1,95 @@
+{{define "logs"}}{{template "page_start" .}}{{template "logs_content" .}}{{template "page_end" .}}{{end}}
+
+{{/* logs_content is the boosted-swap unit (SPEC-0008 REQ-0008-006): <title> keeps
+     history entries titled; the define owns <main id="main-content"> so partial
+     responses carry no shell.
+
+     Logs viewer (issue #151): the diagnostic surface reached from Settings. One
+     panel per source shows its most recent Enable/Refresh job — the exporter
+     command line, exit status, the captured combined stdout+stderr tail (where a
+     WhatsApp exit-2 or a locked-DB error finally shows its detail), and the
+     import counts. It reads only the live job snapshots the Runner holds: a safe
+     GET, no token, no subprocess.
+
+     Accessibility: a single page <h1>; the entries live in an aria-live="polite"
+     region so a running job's updating tail is announced; while any job is active
+     the region self-polls /logs?fragment=entries and swaps itself (CSP-safe: htmx
+     attributes only, no inline scripts/styles). State is conveyed as a text badge
+     + status line, never color alone. */}}
+{{define "logs_content"}}<title>{{.Title}}</title>
+    <main id="main-content" class="flex-1">
+  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
+    <h1 class="screen-h1">Logs</h1>
+    <p class="screen-sub">The most recent Enable and Refresh run for each source — the exporter command,
+      its exit status, captured output, and import counts. This is the diagnostic surface for a failed
+      Enable or Refresh; nothing here leaves this machine.</p>
+
+    {{template "logs_entries" .}}
+  </div>
+    </main>
+{{end}}
+
+{{/* logs_entries is the self-refreshing region: an aria-live list of per-source
+     job panels. While any job is Active it re-fetches /logs?fragment=entries every
+     2s and swaps itself (outerHTML), so a running export's captured tail updates
+     in place; at rest it does not poll. */}}
+{{define "logs_entries"}}
+<div id="logs-entries" class="space-y-5" role="status" aria-live="polite"
+     {{if .AnyActive}}hx-get="/logs?fragment=entries" hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"{{end}}>
+  {{- range .Entries}}
+  <section class="status-card space-y-1" aria-labelledby="log-title-{{.Source}}">
+    <div class="log-entry-head">
+      <span id="log-title-{{.Source}}" class="log-entry-title">{{.Label}}</span>
+      {{- if .HasJob}}
+      {{- if .Failed}}
+      <span class="log-badge log-badge-failed">Failed</span>
+      {{- else if .Done}}
+      <span class="log-badge log-badge-done">Enabled</span>
+      {{- else if .Active}}
+      <span class="log-badge log-badge-active">Running</span>
+      {{- else if .Cancelled}}
+      <span class="log-badge">Cancelled</span>
+      {{- else}}
+      <span class="log-badge">{{.Phase}}</span>
+      {{- end}}
+      {{- end}}
+    </div>
+
+    {{- if not .HasJob}}
+    <p class="log-empty">
+      {{- if $.EnableAvailable}}No Enable or Refresh has run for {{.Label}} yet. Run one from the Providers page; its log will appear here.
+      {{- else}}Logs appear here after an Enable or Refresh in the desktop app (with its bundled exporters) or with a configured exporter path.{{end}}
+    </p>
+    {{- else}}
+    {{- if .StatusText}}<p class="log-status-line">{{.StatusText}}</p>{{end}}
+    <div class="log-meta">
+      {{- if .Command}}
+      <div class="log-meta-row">
+        <span class="log-meta-label">Command</span>
+        <span class="log-meta-value">{{.Command}}</span>
+      </div>
+      {{- end}}
+      {{- if .ExitStatus}}
+      <div class="log-meta-row">
+        <span class="log-meta-label">Exit status</span>
+        <span class="log-meta-value">{{.ExitStatus}}</span>
+      </div>
+      {{- end}}
+      {{- if .Done}}
+      <div class="log-meta-row">
+        <span class="log-meta-label">Imported</span>
+        <span class="log-meta-value">{{.Summary.ConversationsChanged}} conversations · {{.Summary.MessagesAdded}} messages added</span>
+      </div>
+      {{- end}}
+    </div>
+    {{- if .Output}}
+    <div class="eyebrow">Exporter output</div>
+    <div class="copy-block">
+      <pre class="log-output" aria-label="{{.Label}} exporter output">{{.Output}}</pre>
+    </div>
+    {{- end}}
+    {{- end}}
+  </section>
+  {{- end}}
+</div>
+{{end}}

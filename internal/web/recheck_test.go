@@ -97,7 +97,7 @@ func TestRecheckFlipsCardWhenGrantAdded(t *testing.T) {
 	home := signalPlusIMessageHome(t)
 	// First render: iMessage is NOT readable → Needs-permission.
 	srv.SetDetector(detectorFor(home, false))
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 	if !contains(body, `aria-label="iMessage: Needs permission"`) {
 		t.Fatalf("precondition: iMessage should start Needs-permission")
 	}
@@ -128,7 +128,7 @@ func TestRecheckFlipsCardWhenGrantAdded(t *testing.T) {
 func TestSetupGuidanceModalRendersForEachGrant(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 
 	// The dialog is a role="dialog" with aria-modal and a labelling title.
 	if !contains(body, `id="setup-guide-imessage"`) || !contains(body, `role="dialog"`) {
@@ -167,7 +167,7 @@ func TestSetupGuidanceModalRendersForEachGrant(t *testing.T) {
 func TestSetupGuidanceModalA11y(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 
 	if !contains(body, `aria-haspopup="dialog"`) {
 		t.Error("guidance trigger missing aria-haspopup=dialog")

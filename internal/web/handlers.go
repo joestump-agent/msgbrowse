@@ -175,13 +175,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		convCount = len(base.Conversations)
 	}
 	// First-run routing (SPEC-0013 REQ "First-run wizard versus returning
-	// launch"): an empty store (no imported conversations) lands on the Setup
-	// wizard instead of the empty transcript home. A configured store falls
-	// through to the transcript UI below, with Setup reachable from the nav. The
-	// 303 is followed transparently by both a plain browser and an htmx boosted
-	// navigation, so first launch opens on Setup in either mode.
+	// launch"): an empty store (no imported conversations) lands on the Providers
+	// wizard (the renamed Setup surface) instead of the empty transcript home. A
+	// configured store falls through to the transcript UI below, with Providers
+	// reachable from the nav. The 303 is followed transparently by both a plain
+	// browser and an htmx boosted navigation, so first launch opens on Providers in
+	// either mode.
 	if convCount == 0 {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		http.Redirect(w, r, "/providers", http.StatusSeeOther)
 		return
 	}
 	newest, err := s.store.NewestMessageTS(ctx)

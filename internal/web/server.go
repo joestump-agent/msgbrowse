@@ -59,6 +59,7 @@ type Store interface {
 	ListLinks(ctx context.Context, f store.GalleryFilter, cur store.LinkCursor) (*store.LinkPage, error)
 	LatestIngestRun(ctx context.Context) (*store.IngestRun, error)
 	ListSnapshots(ctx context.Context) ([]store.Snapshot, error)
+	SourcesPresent(ctx context.Context) ([]string, error)
 }
 
 // Server holds the dependencies shared by all handlers.
@@ -189,7 +190,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /c/{id}/messages", s.handleMessages)
 	mux.HandleFunc("GET /c/{id}/at/{mid}", s.handleConversationAt)
 	mux.HandleFunc("GET /status", s.handleStatus)
-	mux.HandleFunc("GET /setup", s.handleSetup)
+	// The Setup surface is presented to the user as "Providers" (its route is
+	// /providers); /setup 301-redirects for compatibility with any existing links
+	// or bookmarks. The privileged POSTs keep the /setup/* prefix — they are
+	// server-internal endpoints the rendered controls target, not user-facing URLs.
+	mux.HandleFunc("GET /providers", s.handleSetup)
+	mux.HandleFunc("GET /setup", redirectTo("/providers"))
+	// The Logs viewer (issue #151): a safe GET diagnostic surface reached from
+	// Settings; no mutation, no token.
+	mux.HandleFunc("GET /logs", s.handleLogs)
 	// Privileged Setup POSTs (SPEC-0013 §Security): each is gated inside its
 	// handler by the same-origin + per-session-token check before any work.
 	mux.HandleFunc("POST /setup/enable", s.handleSetupEnable)
@@ -365,6 +374,17 @@ func etagMatch(header, tag string) bool {
 		}
 	}
 	return false
+}
+
+// redirectTo returns a handler that permanently redirects to target. It backs the
+// /setup → /providers compatibility redirect (the page was renamed "Providers"):
+// 301 so browsers and htmx boosted navigations both follow it transparently and
+// caches learn the canonical URL. target is a fixed app-owned path, never
+// request-derived.
+func redirectTo(target string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	}
 }
 
 // isLoopback reports whether addr's host is a loopback address.

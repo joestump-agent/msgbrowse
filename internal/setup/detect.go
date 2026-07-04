@@ -64,6 +64,12 @@ type Detection struct {
 	// Path is the well-known location probed. For WhatsApp it is the matched
 	// ChatStorage.sqlite when Detected, or the glob's parent hint when not.
 	Path string
+	// MediaPath is the source's live media directory, populated only for WhatsApp
+	// when Detected: the app's Message/Media folder beside ChatStorage.sqlite in
+	// the group container. The desktop Enable flow threads it into wtsexporter's
+	// iOS-mode `-m <media dir>` argument (issue #150). Empty for every other
+	// source and for a NotDetected WhatsApp.
+	MediaPath string
 }
 
 // well-known source store locations, expressed relative to HOME. These are the
@@ -85,6 +91,10 @@ const (
 	whatsappContainerGlob = "*WhatsApp*"
 	// whatsappDBName is the WhatsApp app's SQLite store inside its container.
 	whatsappDBName = "ChatStorage.sqlite"
+	// whatsappMediaSubdir is the media directory beside ChatStorage.sqlite in the
+	// group container. wtsexporter's iOS mode reads copied media from here via
+	// `-m <media dir>` (issue #150); it is joined onto the matched container.
+	whatsappMediaSubdir = "Message/Media"
 )
 
 // Detector probes the well-known local locations for each source. Home is the
@@ -180,6 +190,11 @@ func (d Detector) DetectWhatsApp() Detection {
 		if d.fileState(db) == Detected {
 			det.State = Detected
 			det.Path = db
+			// The live media directory sits beside the database in the same
+			// container. The desktop Enable flow hands it to wtsexporter's iOS-mode
+			// `-m` argument (issue #150). It is reported unconditionally when the DB
+			// is present; the export only relies on it for WhatsApp.
+			det.MediaPath = filepath.Join(container, whatsappMediaSubdir)
 			return det
 		}
 	}

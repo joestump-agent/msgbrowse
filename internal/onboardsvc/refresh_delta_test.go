@@ -29,7 +29,7 @@ type growingSignalExporter struct {
 	runs int
 }
 
-func (g *growingSignalExporter) run(_ context.Context, _ string, _ []string, args ...string) error {
+func (g *growingSignalExporter) run(_ context.Context, _ string, _ []string, args ...string) (string, error) {
 	g.mu.Lock()
 	g.runs++
 	runs := g.runs
@@ -38,7 +38,7 @@ func (g *growingSignalExporter) run(_ context.Context, _ string, _ []string, arg
 	dest := args[len(args)-1] // <staging>/export
 	convDir := filepath.Join(dest, "Alice")
 	if err := os.MkdirAll(convDir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	// Run 1 writes 2 messages; run 2 writes the same 2 PLUS 2 new ones. The
 	// importer is incremental + idempotent, so the second import re-sees the
@@ -58,7 +58,7 @@ func (g *growingSignalExporter) run(_ context.Context, _ string, _ []string, arg
 	for _, l := range lines {
 		body = append(body, l...)
 	}
-	return os.WriteFile(filepath.Join(convDir, "chat.md"), body, 0o644)
+	return "", os.WriteFile(filepath.Join(convDir, "chat.md"), body, 0o644)
 }
 
 // staticResolver points every source at a fixed (unused) tool path — the fake

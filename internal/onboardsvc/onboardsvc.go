@@ -20,15 +20,18 @@ package onboardsvc
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/joestump/msgbrowse/internal/config"
 	"github.com/joestump/msgbrowse/internal/imageconv"
 	"github.com/joestump/msgbrowse/internal/imessage"
 	"github.com/joestump/msgbrowse/internal/ingest"
 	"github.com/joestump/msgbrowse/internal/onboard"
+	"github.com/joestump/msgbrowse/internal/setup"
 	"github.com/joestump/msgbrowse/internal/source"
 	"github.com/joestump/msgbrowse/internal/store"
 	"github.com/joestump/msgbrowse/internal/whatsapp"
@@ -53,17 +56,64 @@ func Build(cfg *config.Config, st *store.Store, resolver onboard.ToolResolver, l
 		Resolver: resolver,
 		Exec:     ExecRunner,
 		Importer: &storeImporter{st: st, cfg: cfg, log: log},
-		DataDir:  cfg.DataDir,
-		Logger:   log,
+		// The detected live-source resolver threads WhatsApp's container DB + media
+		// dir into wtsexporter's iOS-mode argv (issue #150). It is HOME-rooted like
+		// the /setup detector, so serve and desktop resolve the same paths; on a
+		// non-macOS box it detects nothing and WhatsApp Enable reports "not
+		// detected" as before.
+		Sources: DetectSourceResolver{det: setup.NewDetector()},
+		DataDir: cfg.DataDir,
+		Logger:  log,
 	})
 }
 
+// DetectSourceResolver resolves the detected live source location (WhatsApp
+// container DB + media dir) via internal/setup detection, satisfying
+// onboard.SourceResolver. It is the production wiring for issue #150: the runner
+// hands wtsexporter the real ChatStorage.sqlite + Message/Media paths so its
+// iOS-mode export runs instead of exiting 2. Signal/iMessage read their own
+// well-known directories, so they resolve to the zero ExportSource.
+type DetectSourceResolver struct {
+	det setup.Detector
+}
+
+// ResolveSource implements onboard.SourceResolver. Only WhatsApp needs an
+// explicit path; every other source returns the zero value.
+func (d DetectSourceResolver) ResolveSource(_ context.Context, src string) (onboard.ExportSource, error) {
+	if src != source.WhatsApp {
+		return onboard.ExportSource{}, nil
+	}
+	det := d.det.DetectWhatsApp()
+	if det.State != setup.Detected {
+		// Not detected: return the zero value; ExportArgs then fails with a clear
+		// "no ChatStorage.sqlite detected" export error rather than an opaque exit 2.
+		return onboard.ExportSource{}, nil
+	}
+	return onboard.ExportSource{DBPath: det.Path, MediaDir: det.MediaPath}, nil
+}
+
+// exporterLogCap bounds how many bytes of an exporter's combined stdout+stderr
+// the Enable/Refresh job retains for the Logs viewer (issue #151). A ring buffer
+// keeps only the TAIL — the last N bytes — because that is where an exporter's
+// fatal error prints (the WhatsApp argparse exit-2 message, a locked-DB error).
+// It is TOOL output only (argv echoes, progress, error text), never message
+// content, and lives only in memory. 32 KiB is generous for a diagnostic tail
+// while capping a chatty exporter's memory footprint.
+const exporterLogCap = 32 << 10 // 32 KiB
+
 // ExecRunner spawns an exporter subprocess with an explicit argv and process
 // environment, streaming its stdout/stderr to the process's stdio (these
-// exporters print useful progress). The context is honored so a Cancel or app
-// shutdown terminates the child. name is a resolved absolute tool path and args
-// are app-owned constants plus the app-computed staging dir — never client input
-// (SPEC-0013 §Security "Subprocess argument safety").
+// exporters print useful progress) AND capturing a bounded tail of the combined
+// output for the Logs viewer (issue #151). The context is honored so a Cancel or
+// app shutdown terminates the child. name is a resolved absolute tool path and
+// args are app-owned constants plus the app-computed staging dir — never client
+// input (SPEC-0013 §Security "Subprocess argument safety").
+//
+// The captured output is returned whether the run succeeded or failed, so a
+// non-zero exit's stderr is preserved for diagnosis rather than discarded (the
+// old behavior surfaced only "exit status N"). It is bounded to exporterLogCap
+// by a ring buffer, and it is TOOL output only — never persisted to disk, never
+// message content.
 //
 // env is the subprocess environment: nil means "inherit the parent process
 // environment" (exec.Cmd.Env semantics) — the case for a native exporter or a
@@ -72,12 +122,58 @@ func Build(cfg *config.Config, st *store.Store, resolver onboard.ToolResolver, l
 // its stdlib after the .app has moved (issue #147). Leaving cmd.Env nil rather
 // than assigning os.Environ() preserves the exact "inherit" behavior serve has
 // always had for BYO exporters.
-func ExecRunner(ctx context.Context, name string, env []string, args ...string) error {
+func ExecRunner(ctx context.Context, name string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = env // nil => inherit; non-nil => the corrected bundled-Python env
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// Tee each stream to the operator's stdio AND a shared bounded ring buffer, so
+	// progress still shows on the console while the tail is captured for the Logs
+	// view. Stdout and stderr are interleaved into one buffer (combined output);
+	// the ring is mutex-guarded because the two streams write concurrently.
+	ring := newRingBuffer(exporterLogCap)
+	cmd.Stdout = io.MultiWriter(os.Stdout, ring)
+	cmd.Stderr = io.MultiWriter(os.Stderr, ring)
+	err := cmd.Run()
+	return ring.String(), err
+}
+
+// ringBuffer is a fixed-capacity byte sink that keeps only the LAST cap bytes
+// written to it — the tail where an exporter's fatal error lands. It is safe for
+// the concurrent stdout+stderr writers exec.Cmd spawns.
+type ringBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+	cap int
+}
+
+func newRingBuffer(capBytes int) *ringBuffer {
+	return &ringBuffer{cap: capBytes}
+}
+
+// Write appends p, retaining only the last cap bytes. It never errors and always
+// reports the full length written (an io.Writer that silently drops the head).
+func (r *ringBuffer) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := len(p)
+	if n >= r.cap {
+		// This write alone overflows the ring: keep only its own tail.
+		r.buf = append(r.buf[:0], p[n-r.cap:]...)
+		return n, nil
+	}
+	if len(r.buf)+n > r.cap {
+		// Drop enough of the existing head to make room for the new bytes.
+		drop := len(r.buf) + n - r.cap
+		r.buf = r.buf[drop:]
+	}
+	r.buf = append(r.buf, p...)
+	return n, nil
+}
+
+// String returns the retained tail as a string.
+func (r *ringBuffer) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return string(r.buf)
 }
 
 // storeImporter imports an adopted managed archive root into the store by

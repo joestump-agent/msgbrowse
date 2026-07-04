@@ -35,7 +35,7 @@ func waitFor(t *testing.T, r *Runner, src string, pred func(Progress) bool) Prog
 // real import can land conversations in the store. It records the argv it was
 // called with so tests can assert the app-owned command line.
 func fakeSignalExporter(calls *[][]string, mu *sync.Mutex) ExecRunner {
-	return func(ctx context.Context, name string, env []string, args ...string) error {
+	return func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 		mu.Lock()
 		*calls = append(*calls, append([]string{name}, args...))
 		mu.Unlock()
@@ -43,11 +43,11 @@ func fakeSignalExporter(calls *[][]string, mu *sync.Mutex) ExecRunner {
 		dest := args[len(args)-1]
 		convDir := filepath.Join(dest, "Alice")
 		if err := os.MkdirAll(convDir, 0o755); err != nil {
-			return err
+			return "", err
 		}
 		chat := "[2022-01-01 10:00:00] Alice: Hello from the fake exporter\n" +
 			"[2022-01-01 10:01:00] Me: Hi back\n"
-		return os.WriteFile(filepath.Join(convDir, "chat.md"), []byte(chat), 0o644)
+		return "", os.WriteFile(filepath.Join(convDir, "chat.md"), []byte(chat), 0o644)
 	}
 }
 
@@ -97,7 +97,7 @@ func TestEnableThreadsResolvedEnvToExporter(t *testing.T) {
 	)
 	r, err := NewRunner(Config{
 		Resolver: envResolver{path: "/App/Contents/Resources/tools/venv/bin/sigexport", env: wantEnv},
-		Exec: func(ctx context.Context, name string, env []string, args ...string) error {
+		Exec: func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 			mu.Lock()
 			gotName, gotEnv = name, env
 			mu.Unlock()
@@ -105,9 +105,9 @@ func TestEnableThreadsResolvedEnvToExporter(t *testing.T) {
 			dest := args[len(args)-1]
 			convDir := filepath.Join(dest, "Alice")
 			if err := os.MkdirAll(convDir, 0o755); err != nil {
-				return err
+				return "", err
 			}
-			return os.WriteFile(filepath.Join(convDir, "chat.md"),
+			return "", os.WriteFile(filepath.Join(convDir, "chat.md"),
 				[]byte("[2022-01-01 10:00:00] Alice: hi\n"), 0o644)
 		},
 		Importer: ImporterFunc(func(context.Context, string, string) (ImportResult, error) {
@@ -147,7 +147,7 @@ func TestEnableWithoutEnvResolverInheritsEnv(t *testing.T) {
 	)
 	r, err := NewRunner(Config{
 		Resolver: staticResolver("/usr/bin/sigexport"),
-		Exec: func(ctx context.Context, name string, env []string, args ...string) error {
+		Exec: func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 			mu.Lock()
 			envSet = true
 			gotNil = env == nil
@@ -155,9 +155,9 @@ func TestEnableWithoutEnvResolverInheritsEnv(t *testing.T) {
 			dest := args[len(args)-1]
 			convDir := filepath.Join(dest, "Alice")
 			if err := os.MkdirAll(convDir, 0o755); err != nil {
-				return err
+				return "", err
 			}
-			return os.WriteFile(filepath.Join(convDir, "chat.md"),
+			return "", os.WriteFile(filepath.Join(convDir, "chat.md"),
 				[]byte("[2022-01-01 10:00:00] Alice: hi\n"), 0o644)
 		},
 		Importer: ImporterFunc(func(context.Context, string, string) (ImportResult, error) {
@@ -259,7 +259,7 @@ func TestCancelMidExportLeavesNoPartialArchive(t *testing.T) {
 		mu       sync.Mutex
 		imported bool
 	)
-	blockingExporter := func(ctx context.Context, name string, env []string, args ...string) error {
+	blockingExporter := func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 		close(started)
 		<-ctx.Done() // block until cancelled
 		// Write a partial file to prove even a exporter that scribbled output on
@@ -267,7 +267,7 @@ func TestCancelMidExportLeavesNoPartialArchive(t *testing.T) {
 		dest := args[len(args)-1]
 		_ = os.MkdirAll(dest, 0o755)
 		_ = os.WriteFile(filepath.Join(dest, "partial"), []byte("x"), 0o644)
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 	r, err := NewRunner(Config{
 		Resolver: staticResolver("/bundle/sigexport"),
@@ -325,7 +325,7 @@ func TestConcurrentEnableRejected(t *testing.T) {
 		mu    sync.Mutex
 		calls int
 	)
-	gatedExporter := func(ctx context.Context, name string, env []string, args ...string) error {
+	gatedExporter := func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -337,7 +337,7 @@ func TestConcurrentEnableRejected(t *testing.T) {
 		dest := args[len(args)-1]
 		convDir := filepath.Join(dest, "Alice")
 		_ = os.MkdirAll(convDir, 0o755)
-		return os.WriteFile(filepath.Join(convDir, "chat.md"), []byte("[2022-01-01 10:00:00] Me: hi\n"), 0o644)
+		return "", os.WriteFile(filepath.Join(convDir, "chat.md"), []byte("[2022-01-01 10:00:00] Me: hi\n"), 0o644)
 	}
 	r, err := NewRunner(Config{
 		Resolver: staticResolver("/bundle/sigexport"),
@@ -383,9 +383,9 @@ func TestToolMissingSentinel(t *testing.T) {
 		Resolver: ToolResolverFunc(func(ctx context.Context, src string) (string, error) {
 			return "", ErrToolMissing
 		}),
-		Exec: func(ctx context.Context, name string, env []string, args ...string) error {
+		Exec: func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 			spawned = true
-			return nil
+			return "", nil
 		},
 		Importer: ImporterFunc(func(ctx context.Context, src, root string) (ImportResult, error) {
 			return ImportResult{}, nil
@@ -416,9 +416,9 @@ func TestPermissionDeniedSentinel(t *testing.T) {
 	var spawned bool
 	r, err := NewRunner(Config{
 		Resolver: staticResolver("/bundle/imessage-exporter"),
-		Exec: func(ctx context.Context, name string, env []string, args ...string) error {
+		Exec: func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 			spawned = true
-			return nil
+			return "", nil
 		},
 		Importer: ImporterFunc(func(ctx context.Context, src, root string) (ImportResult, error) {
 			return ImportResult{}, nil
@@ -444,14 +444,20 @@ func TestPermissionDeniedSentinel(t *testing.T) {
 }
 
 // TestExportFailedSentinel: a non-zero exporter yields PhaseFailed wrapping
-// ErrExportFailed, and the managed root is untouched (staging discarded).
+// ErrExportFailed, the managed root is untouched (staging discarded), AND the
+// exporter's captured combined output + exit status are recorded in the job's
+// JobLog so the Logs viewer can show WHY it failed (issue #151), not just "exit
+// status N".
 func TestExportFailedSentinel(t *testing.T) {
 	dataDir := t.TempDir()
-	wantErr := errors.New("chat.db is locked")
+	wantErr := errors.New("exit status 2")
+	const wantStderr = "usage: wtsexporter [-h] ...\nwtsexporter: error: iOS mode requires -d"
 	r, err := NewRunner(Config{
 		Resolver: staticResolver("/bundle/imessage-exporter"),
-		Exec: func(ctx context.Context, name string, env []string, args ...string) error {
-			return wantErr
+		Exec: func(ctx context.Context, name string, env []string, args ...string) (string, error) {
+			// A failing exporter "prints" a diagnostic to its combined output and
+			// exits non-zero — exactly the WhatsApp exit-2 argparse case.
+			return wantStderr, wantErr
 		},
 		Importer: ImporterFunc(func(ctx context.Context, src, root string) (ImportResult, error) {
 			t.Error("importer must not run after an export failure")
@@ -470,6 +476,20 @@ func TestExportFailedSentinel(t *testing.T) {
 	term := waitFor(t, r, source.IMessage, func(p Progress) bool { return p.Phase.Terminal() })
 	if term.Phase != PhaseFailed || !errors.Is(term.Err, ErrExportFailed) {
 		t.Fatalf("expected PhaseFailed wrapping ErrExportFailed, got phase=%q err=%v", term.Phase, term.Err)
+	}
+	// The captured exporter output + exit status are on the terminal snapshot's
+	// JobLog — the diagnostic surface for the Logs viewer.
+	if term.Log.Output != wantStderr {
+		t.Fatalf("JobLog.Output = %q, want the captured exporter stderr %q", term.Log.Output, wantStderr)
+	}
+	if term.Log.ExitStatus != wantErr.Error() {
+		t.Fatalf("JobLog.ExitStatus = %q, want %q", term.Log.ExitStatus, wantErr.Error())
+	}
+	if term.Log.Tool != "/bundle/imessage-exporter" {
+		t.Fatalf("JobLog.Tool = %q, want the resolved tool path", term.Log.Tool)
+	}
+	if term.Log.ArgvLine() == "" {
+		t.Fatal("JobLog.ArgvLine() is empty; the exporter command line must be recorded")
 	}
 	managedRoot, _ := setup.ManagedRoot(dataDir, source.IMessage)
 	if _, err := os.Stat(managedRoot); !os.IsNotExist(err) {
@@ -565,7 +585,7 @@ func TestAdoptReplacesExistingArchive(t *testing.T) {
 func TestUnknownSourceRejected(t *testing.T) {
 	r, err := NewRunner(Config{
 		Resolver: staticResolver("/bundle/x"),
-		Exec:     func(ctx context.Context, name string, env []string, args ...string) error { return nil },
+		Exec:     func(ctx context.Context, name string, env []string, args ...string) (string, error) { return "", nil },
 		Importer: ImporterFunc(func(ctx context.Context, src, root string) (ImportResult, error) { return ImportResult{}, nil }),
 		DataDir:  t.TempDir(),
 	})
@@ -585,11 +605,11 @@ func TestShutdownCancelsRunningJob(t *testing.T) {
 	dataDir := t.TempDir()
 	started := make(chan struct{})
 	exited := make(chan struct{})
-	blockingExporter := func(ctx context.Context, name string, env []string, args ...string) error {
+	blockingExporter := func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 		close(started)
 		<-ctx.Done()
 		close(exited)
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 	r, err := NewRunner(Config{
 		Resolver: staticResolver("/bundle/sigexport"),

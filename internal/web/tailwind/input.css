@@ -1905,6 +1905,90 @@ html {
   display: none;
 }
 
+/* Logs viewer (issue #151): per-source Enable/Refresh job diagnostics under
+   Settings. Reuses .status-card for the per-source panels; the pieces below are
+   the metadata rows and the bounded, scrollable exporter-output block. All
+   surfaces follow the slate system (borders not shadows, mono values). */
+.log-entry-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.log-entry-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-base-content);
+}
+/* State badge, text not color alone (§Accessibility). Tints by phase. */
+.log-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--color-neutral);
+  color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+  white-space: nowrap;
+}
+.log-badge-failed {
+  color: var(--color-error);
+  border-color: color-mix(in oklab, var(--color-error) 45%, var(--color-neutral));
+}
+.log-badge-done {
+  color: var(--color-success);
+  border-color: color-mix(in oklab, var(--color-success) 45%, var(--color-neutral));
+}
+.log-badge-active {
+  color: var(--color-primary);
+  border-color: color-mix(in oklab, var(--color-primary) 45%, var(--color-neutral));
+}
+.log-status-line {
+  margin: 0.55rem 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: color-mix(in oklab, var(--color-base-content) 82%, transparent);
+}
+.log-meta {
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.4rem;
+}
+.log-meta-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 0.5rem;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.log-meta-label {
+  color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+.log-meta-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in oklab, var(--color-base-content) 88%, transparent);
+  overflow-wrap: anywhere;
+}
+/* Captured exporter output tail: a bounded box that scrolls in BOTH directions
+   so a long/wide diagnostic never grows the page (the body must never scroll
+   horizontally). Reuses the copy-block frame. */
+.log-output {
+  margin: 0;
+  padding: 0.65rem 0.85rem;
+  max-height: 16rem;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+  color: color-mix(in oklab, var(--color-base-content) 85%, transparent);
+}
+.log-empty {
+  font-size: 13px;
+  color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+
 /* Boosted navigation swaps #main-content and htmx scrolls its top into view;
    offset the 54px sticky navbar so page headings are never covered. */
 #main-content {

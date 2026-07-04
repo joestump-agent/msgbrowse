@@ -85,7 +85,7 @@ func TestSetupFullPageRendersCards(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
 
-	rec := get(t, srv, "/setup")
+	rec := get(t, srv, "/providers")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -131,7 +131,7 @@ func TestSetupCardStatesReadyEnabledNotDetected(t *testing.T) {
 	}
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), true))
 
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 	for _, want := range []string{
 		`aria-label="Signal: Enabled"`,
 		`aria-label="iMessage: Ready"`,
@@ -155,7 +155,7 @@ func TestSetupCardStatesReadyEnabledNotDetected(t *testing.T) {
 func TestSetupNeedsPermissionBadgeRenders(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 	for _, want := range []string{"setup-badge-needs-permission", "System Settings"} {
 		if !contains(body, want) {
 			t.Errorf("/setup Needs-permission card missing %q", want)
@@ -170,7 +170,7 @@ func TestSetupPartialHasNoShell(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
 
-	rec := getPartial(t, srv, "/setup")
+	rec := getPartial(t, srv, "/providers")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -196,7 +196,7 @@ func TestSetupA11yLandmarksAndHeading(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
 
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 	if n := strings.Count(body, "<h1"); n != 1 {
 		t.Errorf("/setup has %d <h1> elements, want exactly 1", n)
 	}
@@ -220,27 +220,34 @@ func TestSetupA11yLandmarksAndHeading(t *testing.T) {
 	}
 }
 
-// TestSetupNavLinkPresent asserts the Setup nav link is in the sidebar and, like
-// the other nav links, sits under the hx-boost'd <aside> (so it navigates via the
-// scoped #main-content swap).
+// TestSetupNavLinkPresent asserts the Providers nav link (the renamed Setup
+// surface, at /providers) is in the sidebar and, like the other nav links, sits
+// under the hx-boost'd <aside> (so it navigates via the scoped #main-content
+// swap). It also confirms Status & backups is NO LONGER a primary sidebar nav
+// link — it moved under Settings.
 func TestSetupNavLinkPresent(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	body := get(t, srv, "/").Body.String()
-	if !contains(body, `href="/setup"`) {
-		t.Error("sidebar missing the Setup nav link")
+	if !contains(body, `href="/providers"`) {
+		t.Error("sidebar missing the Providers nav link")
 	}
 	// The link lives inside the boosted <aside> nav (the whole nav block is
-	// boosted at the <aside>), so it is boosted like Search/Media/Status/Settings.
+	// boosted at the <aside>), so it is boosted like Search/Media/Settings.
 	navStart := strings.Index(body, "<nav")
 	navEnd := strings.Index(body, "</nav>")
-	if navStart < 0 || navEnd < 0 || !strings.Contains(body[navStart:navEnd], `href="/setup"`) {
-		t.Error("Setup link is not inside the sidebar <nav>")
+	if navStart < 0 || navEnd < 0 || !strings.Contains(body[navStart:navEnd], `href="/providers"`) {
+		t.Error("Providers link is not inside the sidebar <nav>")
+	}
+	// Status & backups moved out of the primary sidebar nav (under Settings now).
+	if navStart >= 0 && navEnd >= 0 && strings.Contains(body[navStart:navEnd], `href="/status"`) {
+		t.Error("Status & backups link should no longer be in the primary sidebar nav")
 	}
 }
 
 // TestFirstRunRedirectsToSetup is the SPEC-0013 REQ "First-run wizard versus
 // returning launch" empty-store case: GET / against a store with zero
-// conversations 303-redirects to /setup, in both plain and boosted requests.
+// conversations 303-redirects to /providers (the renamed Setup wizard), in both
+// plain and boosted requests.
 func TestFirstRunRedirectsToSetup(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
@@ -257,8 +264,8 @@ func TestFirstRunRedirectsToSetup(t *testing.T) {
 			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("empty store GET / = %d, want 303", rec.Code)
 			}
-			if loc := rec.Header().Get("Location"); loc != "/setup" {
-				t.Errorf("redirect Location = %q, want /setup", loc)
+			if loc := rec.Header().Get("Location"); loc != "/providers" {
+				t.Errorf("redirect Location = %q, want /providers", loc)
 			}
 		})
 	}
@@ -266,7 +273,7 @@ func TestFirstRunRedirectsToSetup(t *testing.T) {
 
 // TestReturningLaunchShowsTranscript is the returning case: a configured store
 // (the fixture has conversations) renders the transcript home, NOT a redirect,
-// and Setup remains reachable as a nav item.
+// and Providers remains reachable as a nav item.
 func TestReturningLaunchShowsTranscript(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	rec := get(t, srv, "/")
@@ -274,12 +281,12 @@ func TestReturningLaunchShowsTranscript(t *testing.T) {
 		t.Fatalf("configured store GET / = %d, want 200 (no redirect)", rec.Code)
 	}
 	body := rec.Body.String()
-	// The home/transcript UI renders (the hero), and Setup is a reachable nav item.
+	// The home/transcript UI renders (the hero), and Providers is a reachable nav item.
 	if !contains(body, "home-hero-title") {
 		t.Error("configured store did not render the transcript home")
 	}
-	if !contains(body, `href="/setup"`) {
-		t.Error("configured store home missing the Setup nav link")
+	if !contains(body, `href="/providers"`) {
+		t.Error("configured store home missing the Providers nav link")
 	}
 }
 
