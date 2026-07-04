@@ -47,7 +47,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "msgbrowse-desktop:", err)
+		fmt.Fprintln(os.Stderr, "msgbrowse:", err)
 		os.Exit(1)
 	}
 }

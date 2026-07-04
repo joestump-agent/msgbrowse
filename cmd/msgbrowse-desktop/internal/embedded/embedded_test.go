@@ -248,3 +248,23 @@ func TestHealthyReflectsServerState(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+func TestResolveDataDir(t *testing.T) {
+	// Relative paths (incl. the "./data" default) collapse to <base>/msgbrowse,
+	// so a Finder launch (cwd="/") never tries to write /data. Absolute paths
+	// pass through so an explicit CLI data dir is honored.
+	base := filepath.Join("/Users", "someone", "Library", "Application Support")
+	cases := []struct {
+		in, want string
+	}{
+		{"./data", filepath.Join(base, "msgbrowse")},
+		{"data", filepath.Join(base, "msgbrowse")},
+		{"relative/nested", filepath.Join(base, "msgbrowse")},
+		{"/explicit/abs", "/explicit/abs"},
+	}
+	for _, c := range cases {
+		if got := resolveDataDir(c.in, base); got != c.want {
+			t.Errorf("resolveDataDir(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

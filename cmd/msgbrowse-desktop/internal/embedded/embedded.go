@@ -63,10 +63,33 @@ func LoadConfig(cfgFile string) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A GUI app launched from Finder/Dock has no meaningful working directory
+	// (macOS gives it "/"), so the default relative data_dir "./data" would
+	// resolve to "/data" and fail to create — the classic "flashes in the Dock
+	// then quits" crash. Anchor any non-absolute data dir under the platform
+	// user-config location instead. An explicit absolute data_dir (config/env)
+	// is honored unchanged, so pointing the app at an existing CLI data dir
+	// still works.
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve user config dir: %w", err)
+	}
+	cfg.DataDir = resolveDataDir(cfg.DataDir, base)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// resolveDataDir returns an absolute data directory for the desktop app. An
+// absolute path is returned unchanged; any relative path (including the
+// "./data" default) collapses to <userConfigDir>/msgbrowse — a stable,
+// writable location that does not depend on the process working directory.
+func resolveDataDir(dir, userConfigDir string) string {
+	if filepath.IsAbs(dir) {
+		return dir
+	}
+	return filepath.Join(userConfigDir, "msgbrowse")
 }
 
 // Server is a running embedded web server: the real internal/web handler
