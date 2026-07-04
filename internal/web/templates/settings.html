@@ -1,0 +1,121 @@
+{{define "settings"}}{{template "page_start" .}}{{template "settings_content" .}}{{template "page_end" .}}{{end}}
+
+{{/* settings_content is the boosted-swap unit (SPEC-0008 REQ-0008-006, the
+     *_content pattern): <title> keeps history entries titled; the define owns
+     <main id="main-content"> so partial responses carry no shell.
+
+     Connect/Settings (SPEC-0010): the MCP endpoint URL, JSON client config,
+     and `claude mcp add` line — each with an icon-only copy button — plus the
+     device-pairing QR section. Copy buttons are wired by /static/copy.js via
+     data-copy-target (no inline handlers — script-src 'self'); confirmations
+     are announced through the aria-live region below and shown visually by the
+     button's copy→check icon swap. Every value is also selectable text, so
+     nothing depends on the clipboard or the QR image alone. */}}
+{{define "settings_content"}}<title>{{.Title}}</title>
+    <main id="main-content" class="flex-1">
+  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
+    <h1 class="screen-h1">Settings</h1>
+    <p class="screen-sub">Connect an MCP client to this archive, or pair another device.</p>
+
+    {{/* Copy confirmations land here for assistive tech (SPEC-0010
+         §Accessibility "Dynamic feedback"): polite live region, visually
+         hidden, updated by copy.js on every successful copy. */}}
+    <p id="copy-announce" class="sr-only" aria-live="polite"></p>
+
+    <section class="status-card space-y-4" aria-labelledby="settings-mcp-heading">
+      <h2 id="settings-mcp-heading" class="status-card-title">MCP server</h2>
+      <p class="status-note">Point Claude Desktop or Claude Code at this archive over streamable HTTP.
+        The endpoint shares this app's address; in desktop mode it is live at
+        <code class="font-mono">/mcp</code>, and <code class="font-mono">msgbrowse mcp --http</code> serves the same tools standalone.</p>
+
+      <div>
+        <div class="eyebrow mb-1" id="settings-endpoint-label">Endpoint URL</div>
+        <div class="copy-block">
+          <pre class="copy-pre"><code id="mcp-endpoint">{{.MCPEndpointURL}}</code></pre>
+          <button type="button" class="copy-btn" data-copy-target="mcp-endpoint"
+                  data-copy-announce="MCP endpoint URL copied"
+                  aria-label="Copy MCP endpoint URL">
+            <span class="icon-copy">{{template "icon-copy" .}}</span><span class="icon-check">{{template "icon-check" .}}</span>
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="eyebrow mb-1" id="settings-json-label">Client configuration (JSON)</div>
+        <div class="copy-block">
+          <pre class="copy-pre"><code id="mcp-config-json">{{.MCPConfigJSON}}</code></pre>
+          <button type="button" class="copy-btn" data-copy-target="mcp-config-json"
+                  data-copy-announce="MCP client configuration JSON copied"
+                  aria-label="Copy MCP client configuration JSON">
+            <span class="icon-copy">{{template "icon-copy" .}}</span><span class="icon-check">{{template "icon-check" .}}</span>
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="eyebrow mb-1" id="settings-cli-label">Claude Code one-liner</div>
+        <div class="copy-block">
+          <pre class="copy-pre"><code id="mcp-add-command">{{.MCPAddCommand}}</code></pre>
+          <button type="button" class="copy-btn" data-copy-target="mcp-add-command"
+                  data-copy-announce="claude mcp add command copied"
+                  aria-label="Copy claude mcp add command">
+            <span class="icon-copy">{{template "icon-copy" .}}</span><span class="icon-check">{{template "icon-check" .}}</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="status-card space-y-4" aria-labelledby="settings-pairing-heading">
+      <h2 id="settings-pairing-heading" class="status-card-title">Device pairing</h2>
+      {{- if .Pairing}}
+      {{/* A pairing window is open: server-rendered QR (PNG data: URI —
+           SPEC-0010 "Server-rendered QR code") plus the manual pairing code as
+           selectable, copyable text, so the QR is never the only path to the
+           payload (§Accessibility "QR alternative"). */}}
+      <div class="qr-panel">
+        <img class="qr-img" src="{{.Pairing.QRDataURI}}" width="220" height="220"
+             alt="Device pairing QR code. Scan it with msgbrowse on another device to pair; the same payload is available below as the manual pairing code.">
+        <div class="qr-panel-text space-y-3 min-w-0">
+          <p class="status-note">Scan the QR code from the other device, or copy the manual pairing
+            code below and paste it into <code class="font-mono">msgbrowse devices pair</code>.
+            The code is single-use and expires with the pairing window.</p>
+          <div>
+            <div class="eyebrow mb-1" id="settings-pairing-code-label">Manual pairing code</div>
+            <div class="copy-block">
+              <pre class="copy-pre"><code id="pairing-code">{{.Pairing.ManualCode}}</code></pre>
+              <button type="button" class="copy-btn" data-copy-target="pairing-code"
+                      data-copy-announce="Manual pairing code copied"
+                      aria-label="Copy manual pairing code">
+                <span class="icon-copy">{{template "icon-copy" .}}</span><span class="icon-check">{{template "icon-check" .}}</span>
+              </button>
+            </div>
+          </div>
+          <p class="status-note">Sync endpoint: <span class="font-mono">{{.Pairing.Endpoint}}</span></p>
+        </div>
+      </div>
+      {{- else if .DeviceSyncEnabled}}
+      {{/* Enabled but no window open — the labeled absent state (SPEC-0010:
+           the page is complete without a live pairing payload). */}}
+      <div class="notice-card">
+        <p class="link-card-title">No pairing window is open.</p>
+        <p class="link-card-sub">Device sync is enabled, but a pairing QR appears here only while a
+          single-use pairing window is active. Open one from this device to pair another.</p>
+      </div>
+      {{- else}}
+      {{/* Device sync disabled (the default): enable instructions instead of a
+           QR, so the page renders complete with device sync entirely absent. */}}
+      <div class="notice-card">
+        <p class="link-card-title">Device sync is not enabled.</p>
+        <p class="link-card-sub">Pairing lets another msgbrowse device mirror this archive over
+          mutually-authenticated TLS. It is strictly opt-in: enable it in your config file, then
+          restart.</p>
+      </div>
+      <div class="copy-block">
+        <pre class="copy-pre"><code>device_sync:
+  enabled: true</code></pre>
+      </div>
+      {{- end}}
+    </section>
+  </div>
+    </main>
+{{end}}

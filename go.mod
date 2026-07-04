@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/charmbracelet/log v1.0.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	modernc.org/sqlite v1.53.0
