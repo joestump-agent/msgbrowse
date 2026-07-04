@@ -6,7 +6,7 @@ import "context"
 // `user_version` pragma. On Open, the migrations runner brings any older
 // database forward to this version. Bump it and append a migration whenever the
 // schema changes.
-const schemaVersion = 9
+const schemaVersion = 10
 
 // SchemaVersion returns the schema revision this binary expects (and migrates a
 // database forward to on Open). Read-only callers — notably `msgbrowse doctor` —
@@ -38,16 +38,17 @@ func (s *Store) UserVersion(ctx context.Context) (int, error) {
 //     source='signal' and each Signal conversation is bootstrapped with a
 //     contact and identifier; see internal/source for the canonical names.
 var migrations = []string{
-	0: "", // unused; versions are 1-based
-	1: schemaV1,
-	2: schemaV2,
-	3: schemaV3,
-	4: schemaV4,
-	5: schemaV5,
-	6: schemaV6,
-	7: schemaV7,
-	8: schemaV8,
-	9: schemaV9,
+	0:  "", // unused; versions are 1-based
+	1:  schemaV1,
+	2:  schemaV2,
+	3:  schemaV3,
+	4:  schemaV4,
+	5:  schemaV5,
+	6:  schemaV6,
+	7:  schemaV7,
+	8:  schemaV8,
+	9:  schemaV9,
+	10: schemaV10,
 }
 
 // schemaV1 is the initial Signal-only schema. It is preserved verbatim so a
@@ -424,5 +425,50 @@ CREATE TABLE IF NOT EXISTS sync_state (
     verified      INTEGER NOT NULL DEFAULT 0,
     updated_at    TEXT    NOT NULL,
     PRIMARY KEY (peer_id, source, rel_path)
+);
+`
+
+// schemaV10 repurposes the device-sync tables for the Syncthing engine
+// (ADR-0021 supersedes ADR-0018; SPEC-0014 REQ "Migration from SPEC-0011").
+// The SPEC-0011 shapes — a peer registry keyed by pinned msgbrowse
+// certificate fingerprint, and per-file byte-range transfer cursors — belong
+// to the retired bespoke transport; Syncthing owns identity, transfer, and
+// resumption now, so both tables are rebuilt:
+//
+//   - paired_devices: one row per paired peer, keyed by its UNIQUE Syncthing
+//     device ID (the SHA-256 of the peer's TLS certificate — the mutual-TLS
+//     identity Syncthing pins). folders is a JSON array of the managed
+//     archive folder ids shared with that peer ("msgbrowse-<source>");
+//     roles stays a JSON object for the importer/replica role story (#158).
+//   - sync_state: one row per managed Syncthing folder — the folder↔source
+//     mapping plus the last time a folder-completion event triggered the
+//     incremental re-ingest (SPEC-0014 REQ "Re-ingest Trigger"). Byte-level
+//     bookkeeping is gone: Syncthing resumes its own transfers.
+//
+// Existing SPEC-0011 rows are CLEARED, not converted — a pinned certificate
+// fingerprint has no Syncthing device-ID equivalent (the peer must be
+// re-paired by scanning the new device-ID QR), and SPEC-0014 requires the
+// migration to leave "no dangling pinned certificates". DROP+CREATE inside
+// the migration transaction does exactly that; both tables remain node-local
+// and are never synchronized.
+const schemaV10 = `
+DROP TABLE IF EXISTS sync_state;
+DROP TABLE IF EXISTS paired_devices;
+
+CREATE TABLE paired_devices (
+    id           INTEGER PRIMARY KEY,
+    device_id    TEXT    NOT NULL UNIQUE,
+    name         TEXT    NOT NULL DEFAULT '',
+    folders      TEXT    NOT NULL DEFAULT '[]',
+    roles        TEXT    NOT NULL DEFAULT '{}',
+    paired_at    TEXT    NOT NULL,
+    last_seen_at TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE sync_state (
+    folder_id      TEXT    PRIMARY KEY,
+    source         TEXT    NOT NULL,
+    last_import_at TEXT    NOT NULL DEFAULT '',
+    updated_at     TEXT    NOT NULL
 );
 `

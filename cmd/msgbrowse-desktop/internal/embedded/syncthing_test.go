@@ -120,7 +120,7 @@ func TestResolveSyncthingNotBundledFallsBackToConfigThenPath(t *testing.T) {
 // sync disabled (SPEC-0014 "Device sync disabled means no Syncthing process").
 func TestStartDeviceSyncDisabledDesktop(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir()}
-	sup, err := startDeviceSync(context.Background(), cfg, testLogger())
+	sup, err := startDeviceSync(context.Background(), cfg, nil, nil, testLogger())
 	if err != nil {
 		t.Fatalf("startDeviceSync: %v", err)
 	}

@@ -25,6 +25,9 @@ import (
 
 	"github.com/joestump/msgbrowse/cmd/msgbrowse-desktop/internal/toolchain"
 	"github.com/joestump/msgbrowse/internal/config"
+	"github.com/joestump/msgbrowse/internal/devsync"
+	"github.com/joestump/msgbrowse/internal/onboard"
+	"github.com/joestump/msgbrowse/internal/store"
 	"github.com/joestump/msgbrowse/internal/syncthing"
 )
 
@@ -78,13 +81,29 @@ func resolveSyncthing(execPath string, cfg *config.Config) (resolvedSyncthing, e
 	return resolvedSyncthing{Bin: bin}, nil
 }
 
+// deviceSync is the running device-sync stack the embedded server owns: the
+// supervised engine, the pairing manager (/settings' PairingSource), and the
+// folder-watch → re-ingest worker (issue #157).
+type deviceSync struct {
+	Sup     *syncthing.Supervisor
+	Manager *devsync.Manager
+	Watcher *devsync.Watcher
+}
+
 // startDeviceSync starts the supervised Syncthing engine for the desktop
-// shell when device_sync.enabled is true; with sync disabled (the default)
-// it returns (nil, nil) and starts nothing — no process, no P2P listener
-// (SPEC-0014 "Device sync disabled means no Syncthing process"). The
-// returned supervisor is stopped by cancelling ctx; Close waits for its
-// drain.
-func startDeviceSync(ctx context.Context, cfg *config.Config, log *slog.Logger) (*syncthing.Supervisor, error) {
+// shell when device_sync.enabled is true, plus the msgbrowse-owned layers on
+// top: the pairing manager behind /settings and the folder-watch worker that
+// dispatches incremental imports through the shared onboard Runner (same
+// per-source job guard, same Logs surface — SPEC-0014 REQ "Re-ingest
+// Trigger", REQ "Concurrency Safety"). Paired peers from the repurposed
+// paired_devices registry are folded into the generated config on every
+// start (devsync.ApplyPeers), so pairing survives restarts.
+//
+// With sync disabled (the default) it returns (nil, nil) and starts nothing
+// — no process, no P2P listener (SPEC-0014 "Device sync disabled means no
+// Syncthing process"). The returned stack is stopped by cancelling ctx;
+// Close waits for its drain.
+func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, runner *onboard.Runner, log *slog.Logger) (*deviceSync, error) {
 	if !cfg.DeviceSync.Enabled {
 		return nil, nil
 	}
@@ -96,10 +115,23 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, log *slog.Logger) 
 	if err != nil {
 		return nil, err
 	}
-	folders, err := syncthing.ExistingManagedFolders(cfg.DataDir)
+	existing, err := syncthing.ExistingManagedFolders(cfg.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("device sync start failed: %w", err)
 	}
+	// The LIVE managed-folder set, shared by the pairing manager and the
+	// watcher: pairing can provision a managed root a fresh replica lacks,
+	// and the watcher must see it immediately (SPEC-0014 REQ "Importer and
+	// Replica Roles").
+	folderSet, err := devsync.NewFolderSet(cfg.DataDir, existing)
+	if err != nil {
+		return nil, fmt.Errorf("device sync start failed: %w", err)
+	}
+	peers, err := st.ListSyncPeers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("device sync start failed: load paired devices: %w", err)
+	}
+	folders, peerDevices := devsync.ApplyPeers(existing, peers)
 	sup, err := syncthing.New(syncthing.Options{
 		BinPath:       res.Bin,
 		PinnedVersion: res.PinnedVersion,
@@ -107,6 +139,7 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, log *slog.Logger) 
 		ListenAddr:    cfg.DeviceSync.ListenAddr,
 		DeviceName:    cfg.DeviceSync.DeviceName,
 		Folders:       folders,
+		Devices:       peerDevices,
 		Logger:        log,
 	})
 	if err != nil {
@@ -115,6 +148,30 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, log *slog.Logger) 
 	if err := sup.Start(ctx); err != nil {
 		return nil, err
 	}
+
+	client := sup.Client()
+	// The payload's friendly name mirrors the supervisor's own-device naming:
+	// configured name, else hostname (SPEC-0014 pairing payload "friendly
+	// device introduction").
+	name := cfg.DeviceSync.DeviceName
+	if name == "" {
+		if host, herr := os.Hostname(); herr == nil && host != "" {
+			name = host
+		}
+	}
+	manager := devsync.NewManager(client, st, name, folderSet, log)
+	watcher, err := devsync.NewWatcher(devsync.WatcherOptions{
+		API:      client,
+		Store:    st,
+		Importer: runner,
+		Folders:  folderSet,
+		Logger:   log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("device sync start failed: %w", err)
+	}
+	watcher.Start(ctx)
+
 	log.Info("device sync engine started", "api_addr", sup.APIAddr(), "bundled", res.Bundled)
-	return sup, nil
+	return &deviceSync{Sup: sup, Manager: manager, Watcher: watcher}, nil
 }

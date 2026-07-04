@@ -275,6 +275,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /setup/disable", s.handleSetupDisable)
 	mux.HandleFunc("GET /setup/status/{source}", s.handleSetupStatus)
 	mux.HandleFunc("GET /settings", s.handleSettings)
+	// Device pairing (SPEC-0014 Authentication table): a privileged POST
+	// behind the same checkSetupPOST gate as the Setup POSTs (issue #157).
+	mux.HandleFunc("POST /settings/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("GET /media/{id}/{path...}", s.handleMedia)
 
 	return gzipMiddleware(securityHeaders(mux))

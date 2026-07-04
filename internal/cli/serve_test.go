@@ -6,9 +6,27 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/joestump/msgbrowse/internal/config"
 	"github.com/joestump/msgbrowse/internal/syncthing"
 )
+
+// testDeviceCfg builds a device-sync-enabled config over a temp data dir.
+func testDeviceCfg(t *testing.T, name string) *config.Config {
+	t.Helper()
+	return &config.Config{
+		DataDir:    t.TempDir(),
+		ListenAddr: "127.0.0.1:8787",
+		LogLevel:   "error",
+		DeviceSync: config.DeviceSyncConfig{
+			Enabled:      true,
+			ListenAddr:   "127.0.0.1:0",
+			DeviceName:   name,
+			PollInterval: 15 * time.Minute,
+		},
+	}
+}
 
 func TestResolveListenAddr(t *testing.T) {
 	const configured = "127.0.0.1:8787"
@@ -58,7 +76,7 @@ func TestResolveListenAddr(t *testing.T) {
 func TestStartDeviceSyncDisabled(t *testing.T) {
 	cfg := testDeviceCfg(t, "disabled-test")
 	cfg.DeviceSync.Enabled = false
-	w, err := startDeviceSync(context.Background(), cfg, nil)
+	w, err := startDeviceSync(context.Background(), cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("startDeviceSync: %v", err)
 	}
@@ -78,7 +96,7 @@ func TestStartDeviceSyncDisabled(t *testing.T) {
 func TestStartDeviceSyncMissingBinaryFailsFast(t *testing.T) {
 	cfg := testDeviceCfg(t, "missing-bin-test")
 	t.Setenv("PATH", t.TempDir()) // no syncthing anywhere
-	w, err := startDeviceSync(context.Background(), cfg, nil)
+	w, err := startDeviceSync(context.Background(), cfg, nil, nil)
 	if !errors.Is(err, syncthing.ErrBinaryNotFound) {
 		t.Fatalf("err = %v, want syncthing.ErrBinaryNotFound", err)
 	}

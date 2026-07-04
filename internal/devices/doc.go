@@ -1,9 +1,19 @@
-// Package devices is the pairing and trust core for msgbrowse's multi-device
-// archive synchronization: single-use pairing tokens with a bounded TTL,
-// long-lived self-signed TLS identities with SHA-256 fingerprint pinning, the
-// versioned QR/manual pairing payload, and the transport-agnostic pairing
-// exchange (importer handler + replica client) that the
-// internal/devices/listener subpackage mounts on the real LAN listener.
+// Package devices is the pairing core for msgbrowse's multi-device archive
+// synchronization.
+//
+// Under ADR-0021 (Syncthing as the sync engine, superseding ADR-0018) the
+// LIVE surface of this package is the device-ID era material: the version-2
+// pairing payload (payload_sync.go — this node's Syncthing device ID +
+// folder introduction as QR/manual code), Syncthing device-ID validation
+// (deviceid.go), and the SyncPeer registry type persisted by
+// internal/store's repurposed paired_devices table.
+//
+// The remainder — single-use pairing tokens with a bounded TTL, long-lived
+// self-signed TLS identities with SHA-256 fingerprint pinning, the version-1
+// token payload, and the transport-agnostic pairing exchange mounted by
+// internal/devices/listener — is the RETIRED SPEC-0011 machinery, no longer
+// reachable from any command or route, awaiting wholesale removal by the
+// migration story (#158; SPEC-0014 REQ "Migration from SPEC-0011").
 //
 // This package deliberately contains NO network listener — that lives in
 // internal/devices/listener. Every primitive here is exercised over

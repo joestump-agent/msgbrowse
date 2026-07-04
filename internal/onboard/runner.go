@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +131,13 @@ const (
 	// modeRefresh re-runs the pipeline on an already-Enabled source, importing
 	// only the delta.
 	modeRefresh
+	// modeSyncImport runs ONLY the incremental import step against the managed
+	// root — no exporter, no staging, no adopt. It is the device-sync re-ingest
+	// path (SPEC-0014 REQ "Re-ingest Trigger"): Syncthing already delivered the
+	// archive files into the managed root, so the import is the entire job. It
+	// runs on replicas that hold no exporter at all, which is exactly why it
+	// must skip tool resolution and the OS-permission probe.
+	modeSyncImport
 )
 
 // job is one supervised worker's live state. It is owned by the Runner and only
@@ -248,6 +256,25 @@ func (r *Runner) Enable(src string) (Progress, error) {
 // Safety": "a second Enable/Refresh while one is in flight MUST be rejected").
 func (r *Runner) Refresh(src string) (Progress, error) {
 	return r.start(src, modeRefresh)
+}
+
+// SyncImport runs ONLY the incremental import step for a source whose managed
+// archive root was just brought to completion by device sync (SPEC-0014 REQ
+// "Re-ingest Trigger"). It is the entry point the folder-watch worker calls:
+// no exporter is resolved or spawned — Syncthing already wrote the archive
+// files — and the import is the same idempotent incremental dispatch Enable
+// and Refresh end with, so a replica's rows converge on exactly what a fresh
+// local ingest would produce (SPEC-0014 REQ "Archive Sync Not Database
+// Replication").
+//
+// It shares the per-source job registry and concurrency guard with
+// Enable/Refresh through start(): a SyncImport while any job for the source
+// is in flight returns ErrJobInProgress and starts nothing, satisfying
+// SPEC-0014 REQ "Concurrency Safety" ("concurrent re-ingest for the same
+// source MUST be serialized"). Progress lands in the same structured job
+// state, so the Logs surface shows sync imports beside Enable/Refresh runs.
+func (r *Runner) SyncImport(src string) (Progress, error) {
+	return r.start(src, modeSyncImport)
 }
 
 // start registers and launches a supervised job for src in the given mode. It is
@@ -388,6 +415,15 @@ func (r *Runner) execute(jobCtx context.Context, src string, mode jobMode) {
 	managedRoot, err := setup.ManagedRoot(r.dataDir, src)
 	if err != nil {
 		r.fail(src, ErrUnknownSource, fmt.Sprintf("cannot resolve archive location: %v", err))
+		return
+	}
+
+	// The device-sync re-ingest is import-only: Syncthing delivered the
+	// archive, so the exporter pipeline (steps 1–4) does not apply — and must
+	// not run, because a replica holds no exporter (SPEC-0014 REQ "Importer
+	// and Replica Roles").
+	if mode == modeSyncImport {
+		r.executeSyncImport(jobCtx, src, managedRoot)
 		return
 	}
 
@@ -534,6 +570,43 @@ func (r *Runner) execute(jobCtx context.Context, src string, mode jobMode) {
 		fmt.Sprintf("%s %s — %d conversations, %d messages added", verb, source.Label(src), res.ConversationsChanged, res.MessagesAdded),
 		res, nil)
 	r.log.Info(logMsg, "source", src,
+		"conversations_changed", res.ConversationsChanged, "messages_added", res.MessagesAdded)
+}
+
+// executeSyncImport is the modeSyncImport body: import the managed root as it
+// stands, nothing else. The root must already exist — a sync-completion event
+// for a source whose root was never materialized is a bug or a race, surfaced
+// as a clear terminal failure rather than a silent no-op (SPEC-0014 REQ
+// "Error Handling Standards"). Cancellation is honored around and inside the
+// import via jobCtx, and every exit publishes a terminal phase.
+func (r *Runner) executeSyncImport(jobCtx context.Context, src, managedRoot string) {
+	if _, err := os.Stat(managedRoot); err != nil {
+		r.fail(src, wrapSentinel(err, ErrImportFailed),
+			fmt.Sprintf("no synced %s archive at its managed location yet: %v", source.Label(src), err))
+		return
+	}
+	if r.cancelled(jobCtx) {
+		r.cancel(src)
+		return
+	}
+	r.update(src, PhaseImporting, fmt.Sprintf("Importing synced %s archive…", source.Label(src)), ImportResult{}, nil)
+	res, err := r.importer.Import(jobCtx, src, managedRoot)
+	if err != nil {
+		if r.cancelled(jobCtx) {
+			r.cancel(src)
+			return
+		}
+		r.fail(src, wrapSentinel(err, ErrImportFailed), fmt.Sprintf("%s sync import failed: %v", source.Label(src), err))
+		return
+	}
+	// No exporter ran, so the JobLog carries only the import summary — the
+	// Logs viewer renders it without a command line (issue #151's template
+	// gates each field on presence).
+	r.setLog(src, JobLog{Summary: res})
+	r.update(src, PhaseDone,
+		fmt.Sprintf("Imported synced %s — %d conversations, %d messages added", source.Label(src), res.ConversationsChanged, res.MessagesAdded),
+		res, nil)
+	r.log.Info("device-sync import complete", "source", src,
 		"conversations_changed", res.ConversationsChanged, "messages_added", res.MessagesAdded)
 }
 
