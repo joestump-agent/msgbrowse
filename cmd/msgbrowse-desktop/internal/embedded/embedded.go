@@ -35,7 +35,6 @@ import (
 	"github.com/joestump/msgbrowse/internal/mcp"
 	"github.com/joestump/msgbrowse/internal/onboard"
 	"github.com/joestump/msgbrowse/internal/store"
-	"github.com/joestump/msgbrowse/internal/syncthing"
 	"github.com/joestump/msgbrowse/internal/web"
 )
 
@@ -130,10 +129,10 @@ type Server struct {
 	MCPURL string
 
 	store     *store.Store
-	onboard   *onboard.Runner       // Setup Enable worker registry; torn down on Close
-	sync      *syncthing.Supervisor // supervised device-sync engine, nil when sync is disabled or failed to start
-	done      chan struct{}         // closed when the serve loop has exited
-	serveErr  error                 // set before done is closed
+	onboard   *onboard.Runner // Setup Enable worker registry; torn down on Close
+	sync      *deviceSync     // supervised device-sync stack, nil when sync is disabled or failed to start
+	done      chan struct{}   // closed when the serve loop has exited
+	serveErr  error           // set before done is closed
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -213,17 +212,24 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Op
 	}
 
 	// Device sync (ADR-0021): with device_sync.enabled the supervised
-	// Syncthing engine runs beside the embedded server; disabled (the
-	// default) starts no process and no P2P listener. Started only after the
-	// listener bind succeeded, so no fail-and-return path leaves a live
-	// child behind. A sync-engine failure is logged with full context and
-	// the app keeps serving — a broken sync engine must not brick the
-	// message browser (documented handling per SPEC-0014 REQ "Error Handling
-	// Standards"; the doctor/status story surfaces the condition in the UI).
-	sup, err := startDeviceSync(ctx, cfg, log)
+	// Syncthing engine runs beside the embedded server — plus the pairing
+	// manager behind /settings and the folder-watch → re-ingest worker
+	// (issue #157); disabled (the default) starts no process and no P2P
+	// listener. Started only after the listener bind succeeded, so no
+	// fail-and-return path leaves a live child behind. A sync-engine failure
+	// is logged with full context and the app keeps serving — a broken sync
+	// engine must not brick the message browser (documented handling per
+	// SPEC-0014 REQ "Error Handling Standards"; the doctor/status story
+	// surfaces the condition in the UI).
+	sup, err := startDeviceSync(ctx, cfg, st, onboardRunner, log)
 	if err != nil {
 		log.Error("device sync failed to start; continuing without sync", "error", err)
 		sup = nil
+	}
+	if sup != nil {
+		// Wire the /settings pairing section to the live engine before the
+		// serve goroutine starts (the SetPairingSource wiring contract).
+		srv.SetPairingSource(sup.Manager)
 	}
 
 	base := "http://" + ln.Addr().String()
@@ -319,14 +325,16 @@ func (e *Server) Close() error {
 		if e.onboard != nil {
 			e.onboard.Shutdown()
 		}
-		// Drain the device-sync supervisor: the Start context is already
+		// Drain the device-sync stack: the Start context is already
 		// cancelled (Close's contract), so this waits for the SIGTERM→grace
-		// shutdown of the Syncthing child — no orphan process outlives the
-		// app (SPEC-0014 "App quit stops the daemon").
+		// shutdown of the Syncthing child AND the folder-watch worker's
+		// goroutines — no orphan process, no leaked worker outlives the app
+		// (SPEC-0014 "App quit stops the daemon", REQ "Concurrency Safety").
 		if e.sync != nil {
-			if serr := e.sync.Wait(); serr != nil {
+			if serr := e.sync.Sup.Wait(); serr != nil {
 				slog.Error("device-sync supervisor exited with error", "error", serr)
 			}
+			e.sync.Watcher.Wait()
 		}
 		err := e.store.Close()
 		if e.serveErr != nil {

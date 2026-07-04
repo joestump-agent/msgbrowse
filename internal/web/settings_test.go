@@ -1,16 +1,19 @@
-// Tests for the Connect/Settings page (issues #100 + #103).
+// Tests for the Connect/Settings page (issues #100 + #103, pairing payload
+// swapped to the Syncthing device ID by #157).
 //
-// Coverage per SPEC-0010: template render in browser (full document) and HTMX
-// partial modes with the MCP endpoint URL, JSON client-config block, and
-// `claude mcp add` line present in both; the server-rendered QR as a PNG
-// data: URI with the manual pairing code as its text fallback; the
-// placeholder/absent states with device sync unconfigured; unchanged security
-// headers (§Security Requirements); and the §Accessibility Requirements
-// attribute contract (single h1, aria-labels on icon-only copy buttons, the
-// aria-live region, QR alt text).
+// Coverage per SPEC-0010 + SPEC-0014: template render in browser (full
+// document) and HTMX partial modes with the MCP endpoint URL, JSON
+// client-config block, and `claude mcp add` line present in both; the
+// server-rendered device-ID QR as a PNG data: URI with the manual code and
+// selectable device ID as its text fallback (SPEC-0014 §Accessibility "QR
+// Code and Manual Device-ID Fallback"); the placeholder/absent states with
+// device sync unconfigured; unchanged security headers (§Security
+// Requirements); and the accessibility attribute contract (single h1,
+// aria-labels on icon-only copy buttons, the aria-live region, QR alt text).
 package web
 
 import (
+	"context"
 	"encoding/base64"
 	"html"
 	"io"
@@ -19,25 +22,49 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joestump/msgbrowse/internal/devices"
 	"github.com/joestump/msgbrowse/internal/mcp"
 )
 
-// staticPairing is a canned PairingSource: whatever #105's live implementation
-// looks like, the page contract only needs "a payload or not".
-type staticPairing struct{ p *devices.PairingPayload }
+// Valid Syncthing-format device IDs (Luhn check digits intact) for fixtures.
+const (
+	testSelfDeviceID = "QRUVHQ4-LQMFCKZ-JPKWU3L-TJNB6NX-XZXB2AV-FLJ5RL4-DC2QFCT-EBHK5AG"
+	testPeerDeviceID = "XW4UY46-VHRCAEN-OTRLIUX-BIIMJVP-KPVFKQW-4H5TU2H-MYSYKFX-S53S7AL"
+)
 
-func (s staticPairing) ActivePairing() (*devices.PairingPayload, bool) { return s.p, s.p != nil }
+// staticPairing is a canned PairingSource: the page contract needs "a payload
+// or not", a recordable Pair, and a peer list.
+type staticPairing struct {
+	p        *devices.SyncPayload
+	peers    []devices.SyncPeer
+	pairErr  error
+	lastCode string
+	paired   int
+}
 
-// testPayload builds a valid SPEC-0011 v1 pairing payload.
-func testPayload(t *testing.T) *devices.PairingPayload {
+func (s *staticPairing) ActivePairing(context.Context) (*devices.SyncPayload, bool) {
+	return s.p, s.p != nil
+}
+
+func (s *staticPairing) Pair(_ context.Context, code string) (devices.SyncPeer, error) {
+	s.lastCode = code
+	if s.pairErr != nil {
+		return devices.SyncPeer{}, s.pairErr
+	}
+	s.paired++
+	return devices.SyncPeer{DeviceID: testPeerDeviceID, Name: "other-mac"}, nil
+}
+
+func (s *staticPairing) Peers(context.Context) ([]devices.SyncPeer, error) {
+	return s.peers, nil
+}
+
+// testPayload builds a valid SPEC-0014 v2 device-ID pairing payload.
+func testPayload(t *testing.T) *devices.SyncPayload {
 	t.Helper()
-	p, err := devices.NewPairingPayload(
-		"192.168.1.10:8788",
-		base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("t", 32))),
-		strings.Repeat("ab", 32),
-	)
+	p, err := devices.NewSyncPayload(testSelfDeviceID, []string{"msgbrowse-signal"}, "studio-mac")
 	if err != nil {
 		t.Fatalf("build pairing payload: %v", err)
 	}
@@ -97,8 +124,8 @@ func TestSettingsPartialCarriesBothBlocks(t *testing.T) {
 		}
 	}
 	// The pairing section rides along in the swap too.
-	if !contains(body, "Device pairing") {
-		t.Error("partial missing the device-pairing section")
+	if !contains(body, "Device sync") {
+		t.Error("partial missing the device-sync section")
 	}
 }
 
@@ -151,9 +178,9 @@ func TestSettingsDeviceSyncDisabledState(t *testing.T) {
 	}
 }
 
-// TestSettingsEnabledNoWindowState: device_sync.enabled=true with no open
-// pairing window renders the no-window absent state, still QR-free.
-func TestSettingsEnabledNoWindowState(t *testing.T) {
+// TestSettingsEnabledNoEngineState: device_sync.enabled=true with no pairing
+// source answering (engine not up) renders the engine-absent state, QR-free.
+func TestSettingsEnabledNoEngineState(t *testing.T) {
 	st, cfg, _ := newTestStoreAndConfig(t)
 	cfg.DeviceSync.Enabled = true
 	srv, err := NewServer(st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -161,22 +188,24 @@ func TestSettingsEnabledNoWindowState(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 	body := get(t, srv, "/settings").Body.String()
-	if !contains(body, "No pairing window is open.") {
-		t.Error("enabled-without-window state missing its explanatory text")
+	if !contains(body, "The sync engine is not running.") {
+		t.Error("enabled-without-engine state missing its explanatory text")
 	}
 	if contains(body, "data:image/png") {
-		t.Error("no QR may render without an open pairing window")
+		t.Error("no QR may render without a running sync engine")
 	}
 	if contains(body, "Device sync is not enabled.") {
 		t.Error("enabled mode must not render the disabled-state instructions")
 	}
 }
 
-// TestSettingsQRRendersFromPairingPayload is the SPEC-0010 "Server-rendered QR
-// code" scenario: with a pairing payload available, the QR appears as an <img>
-// whose src is a PNG data: URI (decodable, real PNG bytes), with alt text and
-// the manual pairing code as the text path to the same payload.
-func TestSettingsQRRendersFromPairingPayload(t *testing.T) {
+// TestSettingsQRRendersDeviceID is the SPEC-0014 "Pairing via Device ID and
+// QR" render scenario: with device sync enabled and the engine reporting its
+// device ID, the QR appears as an <img> whose src is a PNG data: URI
+// (decodable, real PNG bytes), with the SPEC-0014 alt text and BOTH text
+// fallbacks — the manual code and the selectable device ID — plus the pair
+// form gated by the per-session token.
+func TestSettingsQRRendersDeviceID(t *testing.T) {
 	st, cfg, _ := newTestStoreAndConfig(t)
 	cfg.DeviceSync.Enabled = true
 	srv, err := NewServer(st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -184,7 +213,7 @@ func TestSettingsQRRendersFromPairingPayload(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 	payload := testPayload(t)
-	srv.SetPairingSource(staticPairing{p: payload})
+	srv.SetPairingSource(&staticPairing{p: payload})
 
 	rec := get(t, srv, "/settings")
 	if rec.Code != http.StatusOK {
@@ -208,12 +237,13 @@ func TestSettingsQRRendersFromPairingPayload(t *testing.T) {
 		t.Error("QR data URI does not decode to PNG bytes")
 	}
 
-	// Alt text states the image's purpose (§Accessibility "QR alternative").
-	if !contains(body, `alt="Device pairing QR code.`) {
-		t.Error("QR <img> missing purpose-stating alt text")
+	// Alt text per SPEC-0014 §Accessibility: identifies the pairing purpose
+	// and directs to the manual code alternative.
+	if !contains(body, `alt="Device pairing QR code — a text device-ID code is provided below."`) {
+		t.Error("QR <img> missing the SPEC-0014 alt text")
 	}
-	// The QR is never the only path: the manual code (same fields) is present
-	// as selectable, copyable text, plus the sync endpoint.
+	// The QR is never the only path: the manual code (same fields) AND the
+	// device ID are present as selectable, copyable text.
 	manual, err := payload.EncodeManualCode()
 	if err != nil {
 		t.Fatalf("encode manual code: %v", err)
@@ -221,12 +251,67 @@ func TestSettingsQRRendersFromPairingPayload(t *testing.T) {
 	if !contains(body, `<code id="pairing-code">`+manual+`</code>`) {
 		t.Error("settings missing the manual pairing code text fallback")
 	}
-	if !contains(body, payload.Endpoint) {
-		t.Error("settings missing the sync endpoint as text")
+	if !contains(body, `<code id="device-id">`+testSelfDeviceID+`</code>`) {
+		t.Error("settings missing the selectable device ID text")
 	}
-	// A copy affordance covers the code too.
-	if !contains(body, `aria-label="Copy manual pairing code"`) {
-		t.Error("manual pairing code missing its labeled copy button")
+	for _, want := range []string{
+		`aria-label="Copy manual pairing code"`,
+		`aria-label="Copy this device's ID"`,
+	} {
+		if !contains(body, want) {
+			t.Errorf("settings missing copy affordance %s", want)
+		}
+	}
+	// The payload is a device ID, not a secret: the page says so.
+	if !contains(body, "The ID is public") {
+		t.Error("settings missing the public-ID/both-ends-accept explanation")
+	}
+	// The pair form posts through the privileged gate: same-origin action +
+	// hidden per-session token (issue #157 Security Checklist).
+	if !contains(body, `action="/settings/devices/pair"`) {
+		t.Error("settings missing the pair form")
+	}
+	if !regexp.MustCompile(`<input type="hidden" name="setup_token" value="[0-9a-f]{64}">`).MatchString(body) {
+		t.Error("pair form missing the minted per-session token")
+	}
+}
+
+// TestSettingsPairedDevicesList: the explicitly-paired registry renders with
+// name, short + full device ID, shared folders, and pairing time — and shows
+// the labeled empty state when nothing is paired yet.
+func TestSettingsPairedDevicesList(t *testing.T) {
+	st, cfg, _ := newTestStoreAndConfig(t)
+	cfg.DeviceSync.Enabled = true
+	srv, err := NewServer(st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	src := &staticPairing{p: testPayload(t)}
+	srv.SetPairingSource(src)
+
+	body := get(t, srv, "/settings").Body.String()
+	if !contains(body, "No devices paired yet.") {
+		t.Error("empty registry missing its labeled state")
+	}
+
+	src.peers = []devices.SyncPeer{{
+		DeviceID: testPeerDeviceID,
+		Name:     "kitchen-mac",
+		Folders:  []string{"msgbrowse-signal", "msgbrowse-imessage"},
+		PairedAt: time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC),
+	}}
+	body = get(t, srv, "/settings").Body.String()
+	if !contains(body, "kitchen-mac") {
+		t.Error("registry missing the peer name")
+	}
+	if !contains(body, testPeerDeviceID) {
+		t.Error("registry missing the peer's full device ID")
+	}
+	if !contains(body, devices.ShortDeviceID(testPeerDeviceID)) {
+		t.Error("registry missing the peer's short device ID")
+	}
+	if !contains(body, "Signal") || !contains(body, "iMessage") {
+		t.Error("registry missing the human folder labels")
 	}
 }
 

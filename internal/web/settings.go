@@ -1,27 +1,39 @@
-// The Connect/Settings page: MCP connection details plus the device-pairing
-// QR, served by the normal web app so browser and desktop modes render the
-// identical template with identical data — nothing here is desktop-conditional
-// (SPEC-0010 design.md migration step 1).
+// The Connect/Settings page: MCP connection details plus the device-sync
+// pairing section, served by the normal web app so browser and desktop modes
+// render the identical template with identical data — nothing here is
+// desktop-conditional (SPEC-0010 design.md migration step 1).
+//
+// The pairing section renders this node's Syncthing DEVICE ID as a QR plus a
+// manual code (the #104 UX shape with the payload swapped per ADR-0021), the
+// paste-a-code pair form, and the paired-device registry. The payload is a
+// public introduction — device ID, folder ids, friendly name — never a
+// secret: a scanned QR grants nothing until BOTH nodes have paired with each
+// other's ID (SPEC-0014 §Trust Model).
 //
 // Governing: SPEC-0010 REQ "Connect/Settings page in the web app" (endpoint
 // URL + JSON client-config block + `claude mcp add` line, with copy
 // affordances), REQ "Server-rendered QR code" (PNG data: URI via a pure-Go
-// library, no CSP change), SPEC-0010 §Security Requirements (`/settings` is
-// GET-only, public to the loopback operator, behind the unchanged
-// securityHeaders middleware) and §Accessibility Requirements. The QR payload
-// itself is SPEC-0011's contract (internal/devices.PairingPayload) — this
-// page only encodes the bytes it is handed.
+// library, no CSP change); ADR-0021 ("the /settings pairing page stays
+// loopback … it now displays a device ID instead of a token payload");
+// SPEC-0014 REQ "Pairing via Device ID and QR", §Authentication (loopback
+// pairing routes), §Accessibility ("QR Code and Manual Device-ID Fallback").
 package web
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html/template"
 	"net"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/joestump/msgbrowse/internal/devices"
 	"github.com/joestump/msgbrowse/internal/mcp"
+	"github.com/joestump/msgbrowse/internal/source"
+	"github.com/joestump/msgbrowse/internal/syncthing"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
@@ -33,27 +45,36 @@ import (
 // address, not a second port.
 const mcpEndpointPath = "/mcp"
 
-// qrSizePx is the rendered QR image edge in pixels. 220px keeps the ~170-byte
-// version-1 payload comfortably scannable (SPEC-0011 sizes the payload for
-// exactly this) without dominating the page.
+// qrSizePx is the rendered QR image edge in pixels. 220px keeps the compact
+// device-ID payload comfortably scannable without dominating the page.
 const qrSizePx = 220
 
-// PairingSource yields the live pairing payload for the settings page's QR
-// section. It is the seam between SPEC-0010 (which renders the payload) and
-// SPEC-0011 (which owns pairing windows): the device-sync listener story
-// (#105) implements it over devices.Window and wires it in with
-// SetPairingSource before the server starts. With no source wired — or no
-// window open — the page renders its labeled absent state instead of a QR.
+// PairingSource is the device-sync seam behind the /settings pairing section
+// (the SetDetector/SetEnabler pattern): serve and the desktop shell wire
+// internal/devsync's Manager over the supervised Syncthing engine; tests
+// wire fakes. With no source wired — device sync disabled, or the engine
+// failed to start — the page renders its labeled absent states.
+//
+// This replaces the retired SPEC-0011 token-window source: the payload is
+// now this node's Syncthing device ID + folder introduction (public data,
+// SPEC-0014 §Trust Model), and pairing is a symmetric explicit-accept on
+// each node rather than a secret exchange.
 type PairingSource interface {
-	// ActivePairing returns the payload for the currently-open pairing window,
-	// or ok=false when no window is open. The payload carries a live pairing
-	// secret: it goes into the rendered page and nowhere else — never logs.
-	ActivePairing() (payload *devices.PairingPayload, ok bool)
+	// ActivePairing returns this node's pairing payload — its Syncthing
+	// device ID, managed folder ids, and friendly name — or ok=false when
+	// the engine has not answered yet.
+	ActivePairing(ctx context.Context) (*devices.SyncPayload, bool)
+	// Pair executes the explicit accept of the OTHER node's pairing code:
+	// persist the peer, add its device to the daemon, share the managed
+	// archive folders (SPEC-0014 "Pairing via Device ID and QR").
+	Pair(ctx context.Context, code string) (devices.SyncPeer, error)
+	// Peers lists the explicitly-paired device registry for display.
+	Peers(ctx context.Context) ([]devices.SyncPeer, error)
 }
 
-// SetPairingSource wires the device-sync pairing state into /settings. Call it
-// after NewServer and before serving begins — handlers read the field without
-// locking, so late wiring would race.
+// SetPairingSource wires the device-sync pairing manager into /settings. Call
+// it after NewServer and before serving begins — handlers read the field
+// without locking, so late wiring would race.
 func (s *Server) SetPairingSource(ps PairingSource) { s.pairing = ps }
 
 // settingsData drives the Connect/Settings page. The same struct renders in
@@ -73,29 +94,61 @@ type settingsData struct {
 	MCPAddCommand string
 	// DeviceSyncEnabled mirrors config device_sync.enabled: false renders the
 	// enable-instructions state, true without a payload renders the
-	// no-open-window state.
+	// engine-not-ready state.
 	DeviceSyncEnabled bool
-	// Pairing is non-nil only while a pairing window is open.
+	// Pairing is non-nil while the sync engine is running and has reported
+	// its device ID.
 	Pairing *settingsPairing
+	// Peers is the explicitly-paired device registry (empty slice when none).
+	Peers []settingsPeer
+	// PairResult is the post-redirect banner state after a pair POST: one of
+	// "ok", "invalid", "self", "unavailable", "error" — a fixed enum mapped
+	// to text by the template, never request-derived prose.
+	PairResult string
+	// SetupToken is the per-session token the pair form submits through the
+	// same checkSetupPOST gate the Setup POSTs use (SPEC-0013 §Security,
+	// reused verbatim per issue #157). Empty when no pairing source is wired.
+	SetupToken string
 }
 
-// settingsPairing is the QR section's data while a pairing window is open.
+// settingsPairing is the pairing section's data while the engine is running.
 type settingsPairing struct {
-	// QRDataURI is the server-rendered PNG QR as a data: URI (SPEC-0010
-	// "Server-rendered QR code"); img-src 'self' data: already permits it.
+	// QRDataURI is the server-rendered PNG QR of the payload as a data: URI
+	// (SPEC-0010 "Server-rendered QR code"); img-src 'self' data: already
+	// permits it.
 	QRDataURI template.URL
 	// ManualCode is the copyable manual pairing code carrying the same fields
-	// as the QR, so the QR is never the only path to the information
-	// (SPEC-0010 §Accessibility "QR alternative").
+	// as the QR (SPEC-0014 §Accessibility: the manual code IS the
+	// accessibility affordance — a QR scan is never the only path).
 	ManualCode string
-	// Endpoint is the sync listener host:port from the payload, shown as
-	// selectable text beside the QR.
-	Endpoint string
+	// DeviceID is this node's Syncthing device ID as selectable text.
+	DeviceID string
+	// Name is this node's friendly device name from the payload.
+	Name string
+	// FolderLabels are the human labels of the archive folders the payload
+	// introduces (e.g. "Signal", "iMessage").
+	FolderLabels []string
+}
+
+// settingsPeer is one paired device row for the registry list.
+type settingsPeer struct {
+	Name     string
+	DeviceID string
+	ShortID  string
+	// Folders are the human labels of the shared archive folders.
+	Folders  []string
+	PairedAt string
+}
+
+// pairResultStates is the fixed enum of ?pair= banner states. Anything else
+// in the query string renders nothing.
+var pairResultStates = map[string]bool{
+	"ok": true, "invalid": true, "self": true, "unavailable": true, "error": true,
 }
 
 // handleSettings renders the Connect/Settings page. GET-only (the route
-// pattern enforces it), no query parameters trusted, no request body — the
-// SPEC-0010 §Security Requirements posture for this endpoint.
+// pattern enforces it); the only query parameter consulted is the fixed-enum
+// ?pair= banner state from the pair POST's redirect.
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	var base baseData
 	if isPartialRequest(r) {
@@ -119,9 +172,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		MCPAddCommand:     mcp.ClaudeMCPAddCommand(endpoint),
 		DeviceSyncEnabled: s.deviceSyncEnabled,
 	}
+	if pr := r.URL.Query().Get("pair"); pairResultStates[pr] {
+		data.PairResult = pr
+	}
 
 	if s.pairing != nil {
-		if p, ok := s.pairing.ActivePairing(); ok {
+		if p, ok := s.pairing.ActivePairing(r.Context()); ok {
 			pairing, err := newSettingsPairing(p)
 			if err != nil {
 				s.serverError(w, err)
@@ -129,15 +185,38 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			data.Pairing = pairing
 		}
+		peers, err := s.pairing.Peers(r.Context())
+		if err != nil {
+			// The page must still render (SPEC-0014 REQ "Error Handling
+			// Standards": surfaced, not fatal to an unrelated surface).
+			s.log.Warn("settings: could not list paired devices", "error", err)
+		}
+		for _, p := range peers {
+			data.Peers = append(data.Peers, settingsPeer{
+				Name:     p.Name,
+				DeviceID: p.DeviceID,
+				ShortID:  p.ShortID(),
+				Folders:  folderLabels(p.Folders),
+				PairedAt: p.PairedAt.Local().Format("2006-01-02 15:04"),
+			})
+		}
+		// The pair form posts through the same same-origin + per-session
+		// token gate as the Setup POSTs (issue #157 Security Checklist).
+		tok, err := s.setupTokens.mint()
+		if err != nil {
+			s.serverError(w, err)
+			return
+		}
+		data.SetupToken = tok
 	}
 
 	s.render(w, r, "settings", data)
 }
 
-// newSettingsPairing encodes a pairing payload into its two page
+// newSettingsPairing encodes the device-ID payload into its two page
 // presentations: the QR PNG data URI and the manual code (identical fields,
-// SPEC-0011 REQ "Pairing Initiation").
-func newSettingsPairing(p *devices.PairingPayload) (*settingsPairing, error) {
+// SPEC-0014 REQ "Pairing via Device ID and QR").
+func newSettingsPairing(p *devices.SyncPayload) (*settingsPairing, error) {
 	qrBytes, err := p.EncodeQR()
 	if err != nil {
 		return nil, fmt.Errorf("encode pairing payload: %w", err)
@@ -151,10 +230,23 @@ func newSettingsPairing(p *devices.PairingPayload) (*settingsPairing, error) {
 		return nil, fmt.Errorf("encode manual pairing code: %w", err)
 	}
 	return &settingsPairing{
-		QRDataURI:  uri,
-		ManualCode: manual,
-		Endpoint:   p.Endpoint,
+		QRDataURI:    uri,
+		ManualCode:   manual,
+		DeviceID:     p.DeviceID,
+		Name:         p.Name,
+		FolderLabels: folderLabels(p.Folders),
 	}, nil
+}
+
+// folderLabels maps managed folder ids ("msgbrowse-signal") to their human
+// source labels ("Signal"); unknown ids pass through unchanged so nothing
+// renders empty.
+func folderLabels(folderIDs []string) []string {
+	out := make([]string, 0, len(folderIDs))
+	for _, id := range folderIDs {
+		out = append(out, source.Label(strings.TrimPrefix(id, syncthing.FolderIDPrefix)))
+	}
+	return out
 }
 
 // qrPNGDataURI renders opaque payload bytes as a QR code PNG and returns it
@@ -188,4 +280,53 @@ func mcpEndpointURL(r *http.Request) string {
 		}
 	}
 	return "http://" + host + mcpEndpointPath
+}
+
+// handleDevicePair is POST /settings/devices/pair — the privileged action
+// that accepts another node's pairing code. It enforces the SAME gate as the
+// privileged Setup POSTs (checkSetupPOST: same-origin + per-session token +
+// MaxBytesReader body cap, reused verbatim per issue #157 Security
+// Checklist) BEFORE any work, then follows POST-redirect-GET back to
+// /settings with a fixed-enum ?pair= banner state — no request-derived text
+// ever enters the redirect target.
+//
+// Governing: SPEC-0014 §Authentication ("POST /settings/devices/pair …
+// loopback"), SPEC-0013 §Security "Same-origin protection for privileged
+// POSTs" (the reused gate), SPEC-0014 REQ "Error Handling Standards".
+func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
+	if !s.checkSetupPOST(w, r) {
+		return // 403 already written; nothing was mutated
+	}
+	if s.pairing == nil {
+		s.redirectPairResult(w, r, "unavailable")
+		return
+	}
+	code := strings.TrimSpace(r.PostFormValue("code"))
+	if code == "" {
+		s.redirectPairResult(w, r, "invalid")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	peer, err := s.pairing.Pair(ctx, code)
+	switch {
+	case err == nil:
+		s.log.Info("device paired from settings", "device_id", peer.DeviceID, "name", peer.Name)
+		s.redirectPairResult(w, r, "ok")
+	case errors.Is(err, devices.ErrSelfPair):
+		s.redirectPairResult(w, r, "self")
+	case errors.Is(err, devices.ErrInvalidSyncPayload):
+		s.redirectPairResult(w, r, "invalid")
+	default:
+		s.log.Error("device pairing failed", "error", err)
+		s.redirectPairResult(w, r, "error")
+	}
+}
+
+// redirectPairResult finishes the pair POST with a 303 See Other back to the
+// settings page carrying the fixed-enum banner state (PRG: a refresh never
+// replays the POST).
+func (s *Server) redirectPairResult(w http.ResponseWriter, r *http.Request, state string) {
+	http.Redirect(w, r, "/settings?pair="+state, http.StatusSeeOther)
 }

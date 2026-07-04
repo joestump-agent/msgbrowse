@@ -24,17 +24,21 @@
 
      Connect/Settings (SPEC-0010): the MCP endpoint URL, JSON client config,
      and `claude mcp add` line — each with an icon-only copy button — plus the
-     device-pairing QR section. Copy buttons are wired by /static/copy.js via
-     data-copy-target (no inline handlers — script-src 'self'); confirmations
-     are announced through the aria-live region below and shown visually by the
-     button's copy→check icon swap. Every value is also selectable text, so
-     nothing depends on the clipboard or the QR image alone. Logs and Status &
-     backups render under the same shell via the sub-nav above (issue #163). */}}
+     device-sync pairing section (SPEC-0014: this node's Syncthing device-ID
+     QR + manual code, the pair form, and the paired-device registry). Copy
+     buttons are wired by /static/copy.js via data-copy-target (no inline
+     handlers — script-src 'self'); confirmations are announced through the
+     aria-live region below and shown visually by the button's copy→check icon
+     swap. Every value is also selectable text, so nothing depends on the
+     clipboard or the QR image alone. Logs and Status & backups render under
+     the same shell via the sub-nav above (issue #163). */}}
 {{define "settings_content"}}<title>{{.Title}}</title>
-    {{/* hx-history="false": the pairing QR/manual code carries a single-use,
-         time-limited pairing secret. Without this, a boosted navigation away
-         snapshots this page (secret included) into htmx's localStorage history
-         cache, where it would outlive the pairing window. */}}
+    {{/* hx-history="false": the pair form carries a live per-session setup
+         token (the privileged-POST gate). Without this, a boosted navigation
+         away snapshots this page (token included) into htmx's localStorage
+         history cache, where it would outlive the session. The device-ID
+         payload itself is public (SPEC-0014 §Trust Model) — the token is why
+         the history opt-out stays. */}}
     <main id="main-content" class="flex-1" hx-history="false">
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
     <h1 class="screen-h1">Settings</h1>
@@ -89,20 +93,65 @@
       </div>
     </section>
 
+    {{/* Device sync (SPEC-0014 REQ "Pairing via Device ID and QR"): the QR and
+         manual code carry this node's PUBLIC Syncthing device ID + folder
+         introduction — never a secret. Pairing is symmetric explicit-accept:
+         each node pastes/scans the OTHER node's code, and no archive data
+         flows until both have (SPEC-0014 §Trust Model). */}}
     <section class="status-card space-y-4" aria-labelledby="settings-pairing-heading">
-      <h2 id="settings-pairing-heading" class="status-card-title">Device pairing</h2>
+      <h2 id="settings-pairing-heading" class="status-card-title">Device sync</h2>
+      {{- if .PairResult}}
+      {{/* Post-redirect banner from the pair POST (fixed enum, PRG). Rendered
+           server-side on a fresh page load; role=status for assistive tech. */}}
+      <div class="notice-card" role="status">
+        {{- if eq .PairResult "ok"}}
+        <p class="link-card-title">Device paired.</p>
+        <p class="link-card-sub">The archive folders are now shared with it. Pair this node's code on
+          the other device too (both devices must accept each other) — syncing starts once both sides
+          have paired.</p>
+        {{- else if eq .PairResult "invalid"}}
+        <p class="link-card-title">That pairing code was not recognized.</p>
+        <p class="link-card-sub">Paste the other device's manual code (MSGB2.…), its device ID, or
+          scan its QR again.</p>
+        {{- else if eq .PairResult "self"}}
+        <p class="link-card-title">That is this device's own ID.</p>
+        <p class="link-card-sub">Paste the code shown on the <em>other</em> device instead.</p>
+        {{- else if eq .PairResult "unavailable"}}
+        <p class="link-card-title">Device sync is not running.</p>
+        <p class="link-card-sub">Enable device sync and restart, then pair again.</p>
+        {{- else}}
+        <p class="link-card-title">Pairing failed.</p>
+        <p class="link-card-sub">The sync engine did not accept the change — see Logs for details and
+          try again.</p>
+        {{- end}}
+      </div>
+      {{- end}}
       {{- if .Pairing}}
-      {{/* A pairing window is open: server-rendered QR (PNG data: URI —
-           SPEC-0010 "Server-rendered QR code") plus the manual pairing code as
-           selectable, copyable text, so the QR is never the only path to the
-           payload (§Accessibility "QR alternative"). */}}
+      {{/* The engine is running: server-rendered QR of the device-ID payload
+           (PNG data: URI — SPEC-0010 "Server-rendered QR code") plus the
+           manual code and the device ID itself as selectable, copyable text —
+           the manual code IS the accessibility affordance (SPEC-0014
+           §Accessibility "QR Code and Manual Device-ID Fallback"). */}}
       <div class="qr-panel">
         <img class="qr-img" src="{{.Pairing.QRDataURI}}" width="220" height="220"
-             alt="Device pairing QR code. Scan it with msgbrowse on another device to pair; the same payload is available below as the manual pairing code.">
+             alt="Device pairing QR code — a text device-ID code is provided below.">
         <div class="qr-panel-text space-y-3 min-w-0">
-          <p class="status-note">Scan the QR code from the other device, or copy the manual pairing
-            code below and paste it into <code class="font-mono">msgbrowse devices pair</code>.
-            The code is single-use and expires with the pairing window.</p>
+          <p class="status-note">This is <strong>{{.Pairing.Name}}</strong>'s device ID{{if .Pairing.FolderLabels}}, offering
+            the {{range $i, $l := .Pairing.FolderLabels}}{{if $i}}, {{end}}{{$l}}{{end}} archive{{end}}.
+            Scan the QR — or copy the code — on the other device and paste it into its pairing form.
+            The ID is public: pairing only completes when <em>both</em> devices have accepted each
+            other, so a copied code grants nothing by itself.</p>
+          <div>
+            <div class="eyebrow mb-1" id="settings-device-id-label">This device's ID</div>
+            <div class="copy-block">
+              <pre class="copy-pre"><code id="device-id">{{.Pairing.DeviceID}}</code></pre>
+              <button type="button" class="copy-btn" data-copy-target="device-id"
+                      data-copy-announce="Device ID copied"
+                      aria-label="Copy this device's ID">
+                <span class="icon-copy">{{template "icon-copy" .}}</span><span class="icon-check">{{template "icon-check" .}}</span>
+              </button>
+            </div>
+          </div>
           <div>
             <div class="eyebrow mb-1" id="settings-pairing-code-label">Manual pairing code</div>
             <div class="copy-block">
@@ -114,25 +163,60 @@
               </button>
             </div>
           </div>
-          <p class="status-note">Sync endpoint: <span class="font-mono">{{.Pairing.Endpoint}}</span></p>
         </div>
       </div>
+
+      {{/* The pair form: paste the OTHER node's payload. A plain same-origin
+           form POST (CSP form-action 'self') through the privileged-POST gate
+           — the hidden setup_token plus same-origin check, exactly the Setup
+           POSTs' contract (issue #157 Security Checklist). */}}
+      <form method="post" action="/settings/devices/pair" class="space-y-2">
+        <input type="hidden" name="setup_token" value="{{.SetupToken}}">
+        <label class="eyebrow mb-1 block" for="pair-code-input">Pair a device</label>
+        <p class="status-note">Paste the other device's manual code (MSGB2.…) or its device ID.</p>
+        <input id="pair-code-input" name="code" type="text" class="filter-input w-full font-mono"
+               autocomplete="off" spellcheck="false"
+               placeholder="MSGB2.… or XXXXXXX-XXXXXXX-…">
+        <button type="submit" class="setup-btn">Pair device</button>
+      </form>
+
+      {{/* The explicitly-paired device registry — the ONLY set the engine
+           will ever auto-accept pending requests for (SPEC-0014 §Trust
+           Model). */}}
+      <div>
+        <div class="eyebrow mb-1" id="settings-paired-devices-label">Paired devices</div>
+        {{- if .Peers}}
+        <ul class="space-y-2" aria-labelledby="settings-paired-devices-label">
+          {{- range .Peers}}
+          <li class="notice-card">
+            <p class="link-card-title">{{.Name}} <span class="font-mono">({{.ShortID}})</span></p>
+            <p class="link-card-sub">
+              <span class="font-mono">{{.DeviceID}}</span><br>
+              {{if .Folders}}Sharing: {{range $i, $l := .Folders}}{{if $i}}, {{end}}{{$l}}{{end}} · {{end}}Paired {{.PairedAt}}
+            </p>
+          </li>
+          {{- end}}
+        </ul>
+        {{- else}}
+        <p class="status-note">No devices paired yet.</p>
+        {{- end}}
+      </div>
       {{- else if .DeviceSyncEnabled}}
-      {{/* Enabled but no window open — the labeled absent state (SPEC-0010:
-           the page is complete without a live pairing payload). */}}
+      {{/* Enabled but the engine has not reported its device ID (still
+           starting, or failed — see Logs). The page renders complete. */}}
       <div class="notice-card">
-        <p class="link-card-title">No pairing window is open.</p>
-        <p class="link-card-sub">Device sync is enabled, but a pairing QR appears here only while a
-          single-use pairing window is active. Open one from this device to pair another.</p>
+        <p class="link-card-title">The sync engine is not running.</p>
+        <p class="link-card-sub">Device sync is enabled, but the bundled sync engine has not reported
+          its device ID yet. If this persists, check Logs and restart the app.</p>
       </div>
       {{- else}}
       {{/* Device sync disabled (the default): enable instructions instead of a
            QR, so the page renders complete with device sync entirely absent. */}}
       <div class="notice-card">
         <p class="link-card-title">Device sync is not enabled.</p>
-        <p class="link-card-sub">Pairing lets another msgbrowse device mirror this archive over
-          mutually-authenticated TLS. It is strictly opt-in: enable it in your config file, then
-          restart.</p>
+        <p class="link-card-sub">Pairing lets another msgbrowse device mirror this archive — the
+          archive files sync peer-to-peer on your LAN and each device builds its own database. It is
+          strictly opt-in: enable it in your config file, then restart.</p>
       </div>
       <div class="copy-block">
         <pre class="copy-pre"><code>device_sync:

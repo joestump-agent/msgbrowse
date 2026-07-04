@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
 	"syscall"
 
 	"github.com/joestump/msgbrowse/internal/config"
+	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/ingest"
+	"github.com/joestump/msgbrowse/internal/onboard"
 	"github.com/joestump/msgbrowse/internal/onboardsvc"
 	"github.com/joestump/msgbrowse/internal/setup"
 	"github.com/joestump/msgbrowse/internal/source"
@@ -75,11 +78,16 @@ func newServeCommand() *cobra.Command {
 
 			// Device sync (ADR-0021): with device_sync.enabled the
 			// supervised Syncthing engine runs beside the web UI as a
-			// context-managed worker; disabled (the default) means no
-			// Syncthing process and no P2P listener exist at all.
-			devSync, err := startDeviceSync(ctx, cfg, st)
+			// context-managed worker — plus the pairing manager behind
+			// /settings and the folder-watch → re-ingest worker (#157);
+			// disabled (the default) means no Syncthing process and no P2P
+			// listener exist at all.
+			devSync, err := startDeviceSync(ctx, cfg, st, onboardRunner)
 			if err != nil {
 				return err
+			}
+			if devSync != nil {
+				srv.SetPairingSource(devSync.Manager)
 			}
 
 			// Convenience for local use: open the UI in the default browser once
@@ -138,30 +146,42 @@ func resolveListenAddr(cmd *cobra.Command, configured string) (string, error) {
 }
 
 // deviceSyncWorker is the running device-sync engine started by
-// startDeviceSync: the supervised Syncthing daemon's loopback REST address
-// and a Wait that blocks until the supervisor has fully drained (child
-// stopped, no orphan).
+// startDeviceSync: the supervised Syncthing daemon's loopback REST address,
+// the pairing manager the web layer renders /settings from, and a Wait that
+// blocks until the supervisor AND the folder-watch worker have fully drained
+// (child stopped, no orphan, no leaked goroutine).
 type deviceSyncWorker struct {
 	// Addr is the daemon's loopback REST API address (host:port).
 	Addr string
-	done <-chan error
+	// Manager is the pairing surface wired into web.SetPairingSource.
+	Manager *devsync.Manager
+	watcher *devsync.Watcher
+	done    <-chan error
 }
 
-// Wait blocks until the supervision worker exits and returns its error.
-func (w *deviceSyncWorker) Wait() error { return <-w.done }
+// Wait blocks until the supervision worker and the folder-watch worker have
+// exited and returns the supervisor's error.
+func (w *deviceSyncWorker) Wait() error {
+	err := <-w.done
+	w.watcher.Wait()
+	return err
+}
 
 // startDeviceSync starts the supervised Syncthing engine as a context-managed
-// worker when device_sync.enabled is true. With device sync disabled — the
-// default — it returns (nil, nil) and starts NO process and NO socket,
-// keeping the process's socket inventory exactly the loopback web UI
-// (SPEC-0014 "Device sync disabled means no Syncthing process").
+// worker when device_sync.enabled is true, then layers the msgbrowse-owned
+// pieces on top (issue #157): the pairing manager (internal/devsync.Manager,
+// the /settings PairingSource) and the folder-watch → re-ingest worker
+// (devsync.Watcher), which dispatches incremental imports through the shared
+// onboard Runner so sync imports respect the same per-source job guard and
+// surface in the same Logs view. With device sync disabled — the default —
+// it returns (nil, nil) and starts NO process and NO socket, keeping the
+// process's socket inventory exactly the loopback web UI (SPEC-0014 "Device
+// sync disabled means no Syncthing process").
 //
-// This replaces the bespoke SPEC-0011 mTLS listener that used to start here:
-// ADR-0021 supersedes ADR-0018, so the ACTIVE device-sync path is now the
-// bundled/BYO Syncthing supervisor. The retired internal/devices listener
-// code is still in the tree for the `msgbrowse devices` CLI surface and is
-// removed wholesale by the migration story (#158) — it is no longer reachable
-// from serve.
+// Paired peers persist in the repurposed paired_devices table and are folded
+// into the generated config on every start (devsync.ApplyPeers), so pairing
+// survives restarts even though msgbrowse regenerates Syncthing's config.xml
+// each launch.
 //
 // Binary resolution here is the bring-your-own path (config key, then $PATH),
 // mirroring the exporters: only the desktop .app bundles a pinned binary
@@ -171,12 +191,9 @@ func (w *deviceSyncWorker) Wait() error { return <-w.done }
 // serve rather than degrading silently (SPEC-0014 REQ "Error Handling
 // Standards").
 //
-// The store handle is unused today; the pairing story (#157/#158) feeds
-// paired peers from the repurposed paired_devices table into the generated
-// config.
-//
-// Governing: ADR-0021, SPEC-0014 REQ "Supervised Daemon Lifecycle".
-func startDeviceSync(ctx context.Context, cfg *config.Config, _ *store.Store) (*deviceSyncWorker, error) {
+// Governing: ADR-0021, SPEC-0014 REQ "Supervised Daemon Lifecycle", REQ
+// "Pairing via Device ID and QR", REQ "Re-ingest Trigger".
+func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, runner *onboard.Runner) (*deviceSyncWorker, error) {
 	if !cfg.DeviceSync.Enabled {
 		return nil, nil
 	}
@@ -188,12 +205,18 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, _ *store.Store) (*
 	if err != nil {
 		return nil, fmt.Errorf("device sync start failed: %w", err)
 	}
+	peers, err := st.ListSyncPeers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("device sync start failed: load paired devices: %w", err)
+	}
+	folders, peerDevices := devsync.ApplyPeers(folders, peers)
 	sup, err := syncthing.New(syncthing.Options{
 		BinPath:    bin,
 		DataDir:    cfg.DataDir,
 		ListenAddr: cfg.DeviceSync.ListenAddr,
 		DeviceName: deviceName(cfg),
 		Folders:    folders,
+		Devices:    peerDevices,
 		Logger:     slog.Default(),
 	})
 	if err != nil {
@@ -202,6 +225,21 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, _ *store.Store) (*
 	if err := sup.Start(ctx); err != nil {
 		return nil, err
 	}
+
+	client := sup.Client()
+	manager := devsync.NewManager(client, st, deviceName(cfg), folders, slog.Default())
+	watcher, err := devsync.NewWatcher(devsync.WatcherOptions{
+		API:      client,
+		Store:    st,
+		Importer: runner,
+		Folders:  folders,
+		Logger:   slog.Default(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("device sync start failed: %w", err)
+	}
+	watcher.Start(ctx)
+
 	done := make(chan error, 1)
 	go func() {
 		err := sup.Wait()
@@ -210,7 +248,19 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, _ *store.Store) (*
 		}
 		done <- err
 	}()
-	return &deviceSyncWorker{Addr: sup.APIAddr(), done: done}, nil
+	return &deviceSyncWorker{Addr: sup.APIAddr(), Manager: manager, watcher: watcher, done: done}, nil
+}
+
+// deviceName resolves this node's friendly device name: the configured
+// device_sync.device_name, else the hostname.
+func deviceName(cfg *config.Config) string {
+	if cfg.DeviceSync.DeviceName != "" {
+		return cfg.DeviceSync.DeviceName
+	}
+	if host, err := os.Hostname(); err == nil && host != "" {
+		return host
+	}
+	return "msgbrowse"
 }
 
 // resolveSyncthingBin resolves the Syncthing binary for `serve`'s
