@@ -1,6 +1,6 @@
 # ADR-0018: Multi-device via QR pairing and archive synchronization
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0021](0021-syncthing-sync-engine.md)
 - **Date:** 2026-07-03
 - **Deciders:** Joe Stump
 - **Related:** [ADR-0010 (security & privacy posture — **amended** by this ADR)](0010-security-privacy-posture.md), [ADR-0015 (onboarding: doctor/export/sync)](0015-onboarding-doctor-export-sync.md), [ADR-0003 (dual-source archive)](0003-dual-source-archive.md), [ADR-0013 (pure-Go SQLite)](0013-pure-go-sqlite-driver.md), [ADR-0017 (desktop shell)](0017-desktop-shell-wails.md)

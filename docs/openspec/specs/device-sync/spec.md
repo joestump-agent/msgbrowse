@@ -1,5 +1,5 @@
 ---
-status: draft
+status: deprecated
 date: 2026-07-03
 implements: [ADR-0018]
 requires: [SPEC-0001]
