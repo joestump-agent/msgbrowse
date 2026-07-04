@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/joestump/msgbrowse/internal/devices"
+	"github.com/joestump/msgbrowse/internal/store"
 	"github.com/joestump/msgbrowse/internal/syncthing"
 )
 
@@ -46,16 +47,24 @@ type API interface {
 	SystemStatus(ctx context.Context) (*syncthing.SystemStatus, error)
 	// GetDevices / PutDevices read and replace the daemon's device list —
 	// how a paired peer is added (SPEC-0014 "msgbrowse adds the scanned peer
-	// as a Syncthing device").
+	// as a Syncthing device") and removed again on unpair.
 	GetDevices(ctx context.Context) ([]syncthing.DeviceConfig, error)
 	PutDevices(ctx context.Context, devs []syncthing.DeviceConfig) error
 	// GetFolders / PutFolders read and replace the folder list — how the
-	// managed archive folders are shared with a paired peer.
+	// managed archive folders are shared with a paired peer, and unshared
+	// from it on unpair.
 	GetFolders(ctx context.Context) ([]syncthing.FolderConfig, error)
 	PutFolders(ctx context.Context, folders []syncthing.FolderConfig) error
 	// FolderCompletion is the authoritative completion gate for the
-	// re-ingest trigger (no import against a mid-transfer folder).
+	// re-ingest trigger (no import against a mid-transfer folder) and the
+	// per-folder percentage the status surfaces render.
 	FolderCompletion(ctx context.Context, folderID, deviceID string) (*syncthing.Completion, error)
+	// FolderStatus reports a folder's daemon-side state and error counters —
+	// how a paused/errored folder reaches Settings/Status/doctor (SPEC-0014
+	// REQ "Status and Doctor Surfacing").
+	FolderStatus(ctx context.Context, folderID string) (*syncthing.FolderStatus, error)
+	// Connections reports per-device connection state for the peer list.
+	Connections(ctx context.Context) (*syncthing.Connections, error)
 	// Events is the long-poll event feed the watcher consumes.
 	Events(ctx context.Context, since int64, types []string, timeout time.Duration) ([]syncthing.Event, error)
 }
@@ -67,7 +76,15 @@ type PeerStore interface {
 	UpsertSyncPeer(ctx context.Context, p devices.SyncPeer) (int64, error)
 	ListSyncPeers(ctx context.Context) ([]devices.SyncPeer, error)
 	GetSyncPeerByDeviceID(ctx context.Context, deviceID string) (*devices.SyncPeer, error)
+	// DeleteSyncPeer removes a peer's registry row — the durable half of
+	// unpair (SPEC-0014 REQ "Unpair and Revoke").
+	DeleteSyncPeer(ctx context.Context, deviceID string) error
+	// TouchSyncPeerSeen records a peer's last observed connection time.
+	TouchSyncPeerSeen(ctx context.Context, deviceID string, at time.Time) error
 	RecordSyncImport(ctx context.Context, folderID, source string) error
+	// SyncImportStates is the per-folder re-ingest bookkeeping the status
+	// surfaces read for last-import staleness.
+	SyncImportStates(ctx context.Context) ([]store.SyncImportState, error)
 }
 
 // ApplyPeers folds the persisted peer registry into the supervisor's config

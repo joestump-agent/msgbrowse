@@ -50,6 +50,75 @@
       {{end}}
     </div>
 
+    {{/* Device sync (#158; SPEC-0014 REQ "Status and Doctor Surfacing"):
+         engine state, per-peer connection, and per-folder health/completion —
+         Syncthing's state surfaced HERE so the user never opens its GUI.
+         Disabled (the default) renders one neutral line; enabled-but-
+         unreadable renders a pointer to Logs instead of fake numbers. */}}
+    {{if not .DeviceSyncEnabled}}
+    <p class="status-note">Device sync is off (the default). Pair devices from Settings after enabling
+      <code class="font-mono">device_sync</code> in your config.</p>
+    {{else}}
+    <div class="status-card" role="status" aria-live="polite">
+      <div class="status-card-title">Device sync</div>
+      {{if not .Sync}}
+      <p class="status-note">Device sync is enabled, but its state is unavailable in this session —
+        check the Logs page and restart if it persists.</p>
+      {{else}}
+      <p class="status-note mb-4">Sync engine:
+        {{if .Sync.Running}}<span class="sync-badge sync-badge-ok">Running</span>
+        {{else}}<span class="sync-badge sync-badge-err">Not running</span> — peers and folders below show
+        their last-known registry state.{{end}}</p>
+      {{if .Sync.Peers}}
+      <div class="overflow-x-auto">
+        <table class="status-table">
+          <thead><tr><th>Device</th><th>ID</th><th>State</th></tr></thead>
+          <tbody>
+            {{- range .Sync.Peers}}
+            <tr>
+              <td>{{.Name}}</td>
+              <td class="mono">{{.ShortID}}</td>
+              <td>
+                {{- if not .StateKnown}}<span class="sync-badge">Unknown</span>
+                {{- else if .Connected}}<span class="sync-badge sync-badge-ok">Connected</span>
+                {{- else if .Paused}}<span class="sync-badge sync-badge-warn">Paused</span>
+                {{- else}}<span class="sync-badge">Disconnected</span>{{end}}
+              </td>
+            </tr>
+            {{- end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <p class="status-note">No devices paired yet — pair one from Settings.</p>
+      {{end}}
+      {{if .Sync.Folders}}
+      <div class="overflow-x-auto">
+        <table class="status-table">
+          <thead><tr><th>Archive</th><th>State</th><th>Complete</th><th>Last import</th></tr></thead>
+          <tbody>
+            {{- range .Sync.Folders}}
+            <tr>
+              <td>{{.Label}}</td>
+              <td>
+                {{- if eq .Health "healthy"}}<span class="sync-badge sync-badge-ok">Healthy</span>
+                {{- else if eq .Health "syncing"}}<span class="sync-badge sync-badge-info">Syncing</span>
+                {{- else if eq .Health "paused"}}<span class="sync-badge sync-badge-warn">Paused</span>
+                {{- else if eq .Health "error"}}<span class="sync-badge sync-badge-err">Error{{if .Errors}} ({{.Errors}} items){{end}}</span>
+                {{- else}}<span class="sync-badge">Unknown</span>{{end}}
+              </td>
+              <td class="whitespace-nowrap mono">{{if eq .Health "unknown"}}—{{else}}{{printf "%.0f" .Completion}}%{{end}}</td>
+              <td class="whitespace-nowrap">{{if .LastImportAt.IsZero}}—{{else}}{{.LastImportAt.Local.Format "2006-01-02 15:04"}}{{end}}</td>
+            </tr>
+            {{- end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
+      {{end}}
+    </div>
+    {{end}}
+
     {{/* The snapshots card renders only where a snapshot pipeline exists
          (issue #164): recorded snapshots, or a .snapshots dir in the signal
          archive. A desktop-onboarded machine has neither — "0 B across 0

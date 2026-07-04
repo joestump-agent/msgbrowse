@@ -227,9 +227,13 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Op
 		sup = nil
 	}
 	if sup != nil {
-		// Wire the /settings pairing section to the live engine before the
-		// serve goroutine starts (the SetPairingSource wiring contract).
+		// Wire the /settings pairing section, the status/roles monitor, and
+		// the Logs event feed to the live engine before the serve goroutine
+		// starts (the SetPairingSource wiring contract; #158 SPEC-0014 REQ
+		// "Status and Doctor Surfacing").
 		srv.SetPairingSource(sup.Manager)
+		srv.SetSyncMonitor(sup.Manager)
+		srv.SetSyncNotes(sup.Notes.Snapshot)
 	}
 
 	base := "http://" + ln.Addr().String()

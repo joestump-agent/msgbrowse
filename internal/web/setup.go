@@ -21,6 +21,7 @@ import (
 	"html/template"
 	"net/http"
 
+	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/setup"
 	"github.com/joestump/msgbrowse/internal/source"
 	"github.com/joestump/msgbrowse/internal/store"
@@ -43,6 +44,14 @@ const (
 	// setupStateNotDetected: the source's well-known local store is absent (always
 	// the case off macOS, and for a source the user does not have installed).
 	setupStateNotDetected = "not-detected"
+	// setupStateSynced: the source's archive is synced IN from a paired device —
+	// that peer is the source's importer and THIS node is a replica (#158;
+	// SPEC-0014 REQ "Importer and Replica Roles"). Non-actionable here: the
+	// card offers no Enable/Refresh/Disable, because running the exporter
+	// locally would make a second importer, and the re-ingest worker already
+	// imports every completed sync. Wins over every other state — a replica
+	// with imported data must NOT read Enabled (whose Refresh runs exporters).
+	setupStateSynced = "synced"
 )
 
 // setupCard is one source's Setup card: everything the template needs to render
@@ -96,6 +105,10 @@ type setupCard struct {
 	// only the confirmed second POST deletes anything. CSP-safe — a plain
 	// server-rendered affordance, no JS dialogs.
 	ConfirmDisable bool
+	// SyncedFrom names the paired peer this source syncs in from — "name
+	// (SHORTID)" — set only in the synced state (#158). Server-composed from
+	// the registry row, never request-derived.
+	SyncedFrom string
 }
 
 // HasSettingsLink reports whether the card's guidance carries a System Settings
@@ -197,7 +210,9 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 // in source.All order so the page always renders exactly three cards in a stable
 // order.
 //
-// State precedence (SPEC-0013 REQ "Source detection" four states):
+// State precedence (SPEC-0013 REQ "Source detection" states):
+//   - Synced        — the source is synced in from a paired peer (#158): this
+//     node is its replica, so no local action applies (see setupStateSynced).
 //   - Enabled       — the source has imported conversations in the store OR a
 //     configured archive root (issue #149: store-presence is the primary Enabled
 //     signal, so a source that just imported reads Enabled regardless of the live
@@ -209,9 +224,10 @@ func (s *Server) setupCards(ctx context.Context, token string) []setupCard {
 	det := s.detector()
 	present := s.sourcesPresent(ctx)
 	counts := s.sourceCounts(ctx)
+	replicas := s.replicaSources(ctx)
 	cards := make([]setupCard, 0, len(source.All))
 	for _, src := range source.All {
-		cards = append(cards, s.setupCardFor(det, src, token, present, counts))
+		cards = append(cards, s.setupCardFor(det, src, token, present, counts, replicas))
 	}
 	return cards
 }
@@ -227,12 +243,32 @@ func (s *Server) setupCards(ctx context.Context, token string) []setupCard {
 // while its live OS-permission probe would still report Needed. counts is the
 // per-source imported footprint (issue #162), shown on Enabled cards; a nil map
 // (store error) degrades to the plain Imported note.
-func (s *Server) setupCardFor(det setup.Detector, src, token string, present map[string]bool, counts map[string]store.SourceCount) setupCard {
+func (s *Server) setupCardFor(det setup.Detector, src, token string, present map[string]bool, counts map[string]store.SourceCount, replicas map[string]devsync.ReplicaOf) setupCard {
 	card := setupCard{
 		Source:          src,
 		Label:           source.Label(src),
 		EnableAvailable: s.enableAvailable(),
 		Token:           token,
+	}
+
+	// The synced-replica state wins over everything (#158; SPEC-0014 REQ
+	// "Importer and Replica Roles"): a source whose managed root was
+	// provisioned via pairing/sync has its importer on the recorded peer, so
+	// this card must never offer Enable (a second importer) or Refresh (runs
+	// the exporters) — and store-presence must not flip it to Enabled, since
+	// its imported data came from the sync re-ingest, not a local export.
+	if rep, ok := replicas[src]; ok {
+		card.State = setupStateSynced
+		card.StateLabel = "Synced"
+		card.SyncedFrom = rep.PeerName + " (" + rep.PeerShortID + ")"
+		card.Detail = source.Label(src) + " syncs in from " + card.SyncedFrom + " — that device is its importer; this one is a replica and imports each completed sync automatically."
+		card.Actionable = false
+		if c, ok := counts[src]; ok {
+			card.Conversations = c.Conversations
+			card.Messages = c.Messages
+			card.HasCounts = true
+		}
+		return card
 	}
 
 	if present[src] || s.sourceConfigured(src) {

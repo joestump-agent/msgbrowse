@@ -50,6 +50,7 @@ type Manager struct {
 	name    string
 	folders *FolderSet
 	log     *slog.Logger
+	notes   *Notes // nil-safe event feed for the Logs page (#158)
 
 	mu   sync.Mutex
 	myID string // cached from SystemStatus after first success
@@ -65,6 +66,11 @@ func NewManager(api API, st PeerStore, name string, folders *FolderSet, log *slo
 	}
 	return &Manager{api: api, st: st, name: name, folders: folders, log: log.With("component", "devsync")}
 }
+
+// SetNotes wires the shared device-sync event feed (the Logs page's ring).
+// Call before serving begins — the field is read without locking. A nil ring
+// stays a no-op (Notes methods are nil-safe).
+func (m *Manager) SetNotes(n *Notes) { m.notes = n }
 
 // deviceID returns this node's own Syncthing device ID, cached after the
 // first successful read (a device ID is immutable for the life of the
@@ -156,7 +162,7 @@ func (m *Manager) Pair(ctx context.Context, code string) (devices.SyncPeer, erro
 		return devices.SyncPeer{}, fmt.Errorf("device %s is this node: %w", devices.ShortDeviceID(myID), devices.ErrSelfPair)
 	}
 
-	share, folders, err := m.resolveShare(payload)
+	share, folders, roles, err := m.resolveShare(payload)
 	if err != nil {
 		return devices.SyncPeer{}, fmt.Errorf("pair device %s: %w", devices.ShortDeviceID(payload.DeviceID), err)
 	}
@@ -165,10 +171,27 @@ func (m *Manager) Pair(ctx context.Context, code string) (devices.SyncPeer, erro
 		DeviceID: payload.DeviceID,
 		Name:     payload.Name,
 		Folders:  share,
+		Roles:    roles,
 		PairedAt: time.Now(),
 	}
 	if peer.Name == "" {
 		peer.Name = devices.ShortDeviceID(peer.DeviceID)
+	}
+	// Re-pair keeps recorded roles: a role captures whether the root existed
+	// BEFORE the share was first established, and once the archive has synced
+	// in the root always exists — recomputing on re-pair would silently flip
+	// a replica's peer from importer to replica and unlock a conflicting
+	// local Enable (SPEC-0014 REQ "Importer and Replica Roles"). Existing
+	// entries win; only sources without one get this pair's computed role.
+	if existing, err := m.st.GetSyncPeerByDeviceID(ctx, peer.DeviceID); err == nil {
+		for src, role := range existing.Roles {
+			if role != "" {
+				if peer.Roles == nil {
+					peer.Roles = make(map[string]string)
+				}
+				peer.Roles[src] = role
+			}
+		}
 	}
 	id, err := m.st.UpsertSyncPeer(ctx, peer)
 	if err != nil {
@@ -185,19 +208,127 @@ func (m *Manager) Pair(ctx context.Context, code string) (devices.SyncPeer, erro
 	if err := m.ensureFolderShares(ctx, peer.DeviceID, share); err != nil {
 		return peer, err
 	}
-	m.log.Info("device paired", "device_id", peer.DeviceID, "name", peer.Name, "folders", share)
+	m.log.Info("device paired", "device_id", peer.DeviceID, "name", peer.Name, "folders", share, "roles", roles)
+	m.notes.Add(NoteInfo, fmt.Sprintf("Paired %s (%s) — sharing %d folder(s)", peer.Name, peer.ShortID(), len(share)))
 	return peer, nil
 }
 
+// Unpair severs a paired peer (SPEC-0014 REQ "Unpair and Revoke"): delete its
+// registry row, then remove its device from the daemon config and unshare
+// every folder from it via the REST API, so archive data stops flowing to it
+// immediately and locally — without requiring the peer to be reachable or
+// cooperative. Local archives and the database are NEVER touched: unpair
+// severs only future synchronization.
+//
+// Ordering mirrors Pair's registry-first contract in reverse: the registry
+// DELETE is the durable trust revocation and happens before the daemon
+// mutations, so even if a REST call then fails the next daemon start
+// regenerates config without the peer (ApplyPeers) and the watcher's scoped
+// auto-accept already refuses it. A post-delete REST failure is surfaced
+// (never swallowed) so the operator knows live sync continues until the
+// engine restarts.
+//
+// Deleting the row also releases the peer's recorded importer-role claims:
+// a source that was synced in from it becomes locally Enable-able again —
+// the single-importer invariant binds "across a paired set", and the peer
+// has left the set.
+func (m *Manager) Unpair(ctx context.Context, deviceID string) (devices.SyncPeer, error) {
+	id, err := devices.CanonicalDeviceID(deviceID)
+	if err != nil {
+		return devices.SyncPeer{}, fmt.Errorf("unpair device: %w", err)
+	}
+	peer, err := m.st.GetSyncPeerByDeviceID(ctx, id)
+	if err != nil {
+		return devices.SyncPeer{}, fmt.Errorf("unpair device %s: %w", devices.ShortDeviceID(id), err)
+	}
+	if err := m.st.DeleteSyncPeer(ctx, id); err != nil {
+		return *peer, fmt.Errorf("unpair device %s: %w", peer.ShortID(), err)
+	}
+	if err := RemoveDeviceFromDaemon(ctx, m.api, id); err != nil {
+		m.notes.Add(NoteError, fmt.Sprintf("Unpaired %s (%s) from the registry, but the engine did not accept the removal — sync to it stops at the next engine start", peer.Name, peer.ShortID()))
+		return *peer, fmt.Errorf("unpair device %s: %w", peer.ShortID(), err)
+	}
+	m.log.Info("device unpaired", "device_id", peer.DeviceID, "name", peer.Name)
+	m.notes.Add(NoteInfo, fmt.Sprintf("Unpaired %s (%s) — folders unshared, sync to it stopped; local archives kept", peer.Name, peer.ShortID()))
+	return *peer, nil
+}
+
+// RemoveDeviceFromDaemon strips deviceID from the daemon's live config:
+// every folder's share list first (explicit unshare per SPEC-0014 "remove
+// the peer's Syncthing device and unshare the archive folders"), then the
+// device list itself. Idempotent — a device the daemon no longer knows is a
+// no-op, so the CLI unpair and a settings unpair can race harmlessly. Shared
+// by Manager.Unpair and `msgbrowse devices unpair` (which reaches a running
+// daemon through the persisted REST address).
+func RemoveDeviceFromDaemon(ctx context.Context, api API, deviceID string) error {
+	short := devices.ShortDeviceID(deviceID)
+	folders, err := api.GetFolders(ctx)
+	if err != nil {
+		return fmt.Errorf("unshare folders from %s: read daemon folders: %w", short, err)
+	}
+	changed := false
+	for i := range folders {
+		kept := folders[i].Devices[:0]
+		for _, ref := range folders[i].Devices {
+			if ref.DeviceID == deviceID {
+				changed = true
+				continue
+			}
+			kept = append(kept, ref)
+		}
+		folders[i].Devices = kept
+	}
+	if changed {
+		if err := api.PutFolders(ctx, folders); err != nil {
+			return fmt.Errorf("unshare folders from %s: %w", short, err)
+		}
+	}
+
+	devs, err := api.GetDevices(ctx)
+	if err != nil {
+		return fmt.Errorf("remove device %s: read daemon devices: %w", short, err)
+	}
+	keptDevs := devs[:0]
+	removed := false
+	for _, d := range devs {
+		if d.DeviceID == deviceID {
+			removed = true
+			continue
+		}
+		keptDevs = append(keptDevs, d)
+	}
+	if removed {
+		if err := api.PutDevices(ctx, keptDevs); err != nil {
+			return fmt.Errorf("remove device %s: %w", short, err)
+		}
+	}
+	return nil
+}
+
 // resolveShare turns a validated payload's folder introduction into the share
-// set and the concrete managed folders behind it, provisioning any known-
-// source folder this node lacks (the fresh-replica path). An empty
-// introduction — a bare device ID — means every locally managed folder.
-// Introduced ids outside the fixed source enum are logged and dropped, never
-// an error: the rest of the introduction still pairs.
-func (m *Manager) resolveShare(payload *devices.SyncPayload) ([]string, []syncthing.Folder, error) {
+// set, the concrete managed folders behind it, and the per-source role the
+// PEER plays — provisioning any known-source folder this node lacks (the
+// fresh-replica path). An empty introduction — a bare device ID — means every
+// locally managed folder, all of which this node already holds, so the peer
+// is their replica. Introduced ids outside the fixed source enum are logged
+// and dropped, never an error: the rest of the introduction still pairs.
+//
+// Role detection (SPEC-0014 REQ "Importer and Replica Roles"): the signal is
+// whether the share's managed root existed here BEFORE the pair. A folder
+// this call had to PROVISION originates on the peer — the peer is recorded
+// as that source's importer and this node becomes its replica (its Providers
+// card flips to the synced state and a local Enable is refused). A folder
+// this node already held marks the peer the replica.
+func (m *Manager) resolveShare(payload *devices.SyncPayload) ([]string, []syncthing.Folder, map[string]string, error) {
+	roles := make(map[string]string)
 	if len(payload.Folders) == 0 {
-		return m.folderIDs(), m.folders.List(), nil
+		ids := m.folderIDs()
+		for _, id := range ids {
+			if src, ok := SourceForFolderID(id); ok {
+				roles[src] = devices.RoleReplica
+			}
+		}
+		return ids, m.folders.List(), roles, nil
 	}
 	var (
 		share   []string
@@ -209,22 +340,28 @@ func (m *Manager) resolveShare(payload *devices.SyncPayload) ([]string, []syncth
 			continue
 		}
 		seen[id] = true
-		if _, ok := SourceForFolderID(id); !ok {
+		src, ok := SourceForFolderID(id)
+		if !ok {
 			m.log.Info("ignoring introduced folder (id outside the managed source enum)",
 				"folder", id, "device_id", payload.DeviceID)
 			continue
 		}
-		f, err := m.folders.Provision(id)
+		f, created, err := m.folders.Provision(id)
 		if err != nil {
 			// A known-source folder that cannot be provisioned is a hard
 			// pairing error (disk trouble), surfaced per SPEC-0014 REQ "Error
 			// Handling Standards" — never a silent partial pair.
-			return nil, nil, err
+			return nil, nil, nil, err
+		}
+		if created {
+			roles[src] = devices.RoleImporter
+		} else {
+			roles[src] = devices.RoleReplica
 		}
 		share = append(share, id)
 		folders = append(folders, f)
 	}
-	return share, folders, nil
+	return share, folders, roles, nil
 }
 
 // Peers implements web.PairingSource's registry listing for the /settings

@@ -29,6 +29,31 @@
 
     {{template "logs_entries" .}}
 
+    {{/* Device-sync event feed (#158; SPEC-0014 REQ "Status and Doctor
+         Surfacing"): the significant sync events of this app session — pairs,
+         unpairs, accepted offers, dispatched sync imports, peer connects —
+         from internal/devsync's bounded ring, rendered beside the shell notes
+         so sync activity is observable without Syncthing's GUI. Present only
+         when device sync wires a provider; every line is a server-owned
+         string. Static per page load (outside the self-polling entries
+         fragment). */}}
+    {{- if .SyncNotes}}
+    <section class="status-card space-y-1" aria-labelledby="log-title-devsync">
+      <div class="log-entry-head">
+        <span id="log-title-devsync" class="log-entry-title">Device sync</span>
+      </div>
+      <p class="log-empty">Sync engine events from this app session.</p>
+      <div class="log-meta">
+        {{- range .SyncNotes}}
+        <div class="log-meta-row">
+          <span class="log-meta-label">{{.Clock}}</span>
+          <span class="log-meta-value">{{if .IsError}}<span class="log-badge log-badge-failed">error</span> {{end}}{{.Message}}</span>
+        </div>
+        {{- end}}
+      </div>
+    </section>
+    {{- end}}
+
     {{/* Desktop-shell diagnostics (issue #167): the systray/dock startup notes
          the shell records into its bounded ring buffer — so a menubar icon that
          fails to register on real macOS is visible HERE, not silently lost.

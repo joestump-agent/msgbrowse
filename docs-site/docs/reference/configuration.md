@@ -98,6 +98,17 @@ The `llm` block configures the one OpenAI-compatible endpoint msgbrowse ever tal
 | `journal.exclude_conversations` | string list | `[]` | Privacy denylist: conversation folder names whose content is **never** sent to the LLM, for any feature (digests, facts). |
 | `journal.max_days_per_run` | int | `0` | Cap on how many days a single digest run processes. `0` means unbounded. |
 
+### `device_sync.*`
+
+Multi-device archive sync ([Device sync](../features/device-sync.md)). Strictly opt-in: with `enabled: false` (the default) no sync engine process runs and msgbrowse keeps its loopback-only posture. When enabled, msgbrowse supervises a bundled (desktop app) or bring-your-own (`serve`) Syncthing as the transfer engine, configured LAN-only — global discovery and relaying off.
+
+| Key | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `device_sync.enabled` | bool | `false` | Turn device sync on. Off means no engine process and no P2P listener. |
+| `device_sync.listen_addr` | string | `:8788` | The engine's P2P sync listener bind (host:port). Must use a port distinct from `listen_addr`; it is the one socket beyond loopback, protected by device-ID mutual TLS. |
+| `device_sync.device_name` | string | `""` | This device's friendly name shown on paired peers. Empty derives the hostname. |
+| `device_sync.syncthing_bin` | string | `""` | Path to the Syncthing binary for `msgbrowse serve` (bring-your-own). Empty looks up `syncthing` on `PATH`. The desktop app ignores this and always runs its bundled, version-pinned copy. |
+
 ## Flag overrides
 
 Persistent flags, available on every subcommand, bind directly onto config keys:

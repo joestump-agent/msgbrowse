@@ -254,3 +254,114 @@ VALUES (1, 'signal', 'export/Alice/chat.md', 100, 'ff', 50, 0, '2026-01-01T00:00
 		t.Fatalf("new-shape insert on migrated db: %v", err)
 	}
 }
+
+// TestSyncPeerRolesRoundTrip (#158; SPEC-0014 REQ "Importer and Replica
+// Roles"): the per-source role map persists through the repurposed roles
+// column, upserts replace it, and a role-free peer scans as an empty map —
+// never an error.
+func TestSyncPeerRolesRoundTrip(t *testing.T) {
+	st := newSyncStore(t)
+	ctx := context.Background()
+
+	if _, err := st.UpsertSyncPeer(ctx, devices.SyncPeer{
+		DeviceID: testDeviceA,
+		Name:     "importer-mac",
+		Folders:  []string{"msgbrowse-signal"},
+		Roles:    map[string]string{"signal": devices.RoleImporter, "imessage": devices.RoleReplica},
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := st.GetSyncPeerByDeviceID(ctx, testDeviceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Roles["signal"] != devices.RoleImporter || got.Roles["imessage"] != devices.RoleReplica {
+		t.Errorf("roles = %v", got.Roles)
+	}
+	if !got.ImporterFor("signal") || got.ImporterFor("imessage") {
+		t.Errorf("ImporterFor projection wrong: %v", got.Roles)
+	}
+
+	// Upsert replaces the role map (the Manager merges before persisting).
+	if _, err := st.UpsertSyncPeer(ctx, devices.SyncPeer{
+		DeviceID: testDeviceA, Name: "importer-mac",
+		Roles: map[string]string{"signal": devices.RoleImporter},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetSyncPeerByDeviceID(ctx, testDeviceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Roles) != 1 || got.Roles["signal"] != devices.RoleImporter {
+		t.Errorf("roles after re-upsert = %v", got.Roles)
+	}
+
+	// A peer stored with nil roles reads back as an empty, usable map state.
+	if _, err := st.UpsertSyncPeer(ctx, devices.SyncPeer{DeviceID: testDeviceB, Name: "plain"}); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := st.GetSyncPeerByDeviceID(ctx, testDeviceB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.ImporterFor("signal") {
+		t.Error("role-free peer reports an importer role")
+	}
+}
+
+// TestDeleteSyncPeer (#158; SPEC-0014 REQ "Unpair and Revoke"): the row is
+// removed, a second delete reports the typed unknown-peer sentinel, and the
+// OTHER peer's row is untouched.
+func TestDeleteSyncPeer(t *testing.T) {
+	st := newSyncStore(t)
+	ctx := context.Background()
+	for _, p := range []devices.SyncPeer{
+		{DeviceID: testDeviceA, Name: "a"},
+		{DeviceID: testDeviceB, Name: "b"},
+	} {
+		if _, err := st.UpsertSyncPeer(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := st.DeleteSyncPeer(ctx, strings.ToLower(testDeviceA)); err != nil {
+		t.Fatalf("delete (transcribed id): %v", err)
+	}
+	if _, err := st.GetSyncPeerByDeviceID(ctx, testDeviceA); !errors.Is(err, devices.ErrUnknownSyncPeer) {
+		t.Errorf("deleted peer still readable: %v", err)
+	}
+	if err := st.DeleteSyncPeer(ctx, testDeviceA); !errors.Is(err, devices.ErrUnknownSyncPeer) {
+		t.Errorf("double delete = %v, want ErrUnknownSyncPeer", err)
+	}
+	if err := st.DeleteSyncPeer(ctx, "not-a-device-id"); err == nil {
+		t.Error("malformed device id accepted by delete")
+	}
+	if _, err := st.GetSyncPeerByDeviceID(ctx, testDeviceB); err != nil {
+		t.Errorf("unrelated peer damaged by delete: %v", err)
+	}
+}
+
+// TestTouchSyncPeerSeen (#158): the last-seen timestamp round-trips; touching
+// an unknown peer is a no-op by contract (racing an unpair must not error).
+func TestTouchSyncPeerSeen(t *testing.T) {
+	st := newSyncStore(t)
+	ctx := context.Background()
+	if _, err := st.UpsertSyncPeer(ctx, devices.SyncPeer{DeviceID: testDeviceA, Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	seen := time.Date(2026, 7, 4, 12, 30, 0, 0, time.UTC)
+	if err := st.TouchSyncPeerSeen(ctx, testDeviceA, seen); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetSyncPeerByDeviceID(ctx, testDeviceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LastSeenAt.Equal(seen) {
+		t.Errorf("LastSeenAt = %v, want %v", got.LastSeenAt, seen)
+	}
+	if err := st.TouchSyncPeerSeen(ctx, testDeviceB, seen); err != nil {
+		t.Errorf("touching an unknown peer errored: %v", err)
+	}
+}

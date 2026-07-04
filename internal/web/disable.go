@@ -56,7 +56,7 @@ func (s *Server) handleSetupDisable(w http.ResponseWriter, r *http.Request) {
 	// source: the card re-renders with an explanation instead of deleting.
 	if s.enabler != nil {
 		if prog, ok := s.enabler.Status(src); ok && prog.Active() {
-			card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(ctx), s.sourceCounts(ctx))
+			card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(ctx), s.sourceCounts(ctx), s.replicaSources(ctx))
 			card.Detail = "A job is running for " + source.Label(src) + " — wait for it to finish before disabling."
 			s.renderFragment(w, "setup_card", card)
 			return
@@ -65,7 +65,7 @@ func (s *Server) handleSetupDisable(w http.ResponseWriter, r *http.Request) {
 
 	if r.PostFormValue("confirm") != "1" {
 		// Step 1: no mutation. Render the card in its inline confirm state.
-		card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(ctx), s.sourceCounts(ctx))
+		card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(ctx), s.sourceCounts(ctx), s.replicaSources(ctx))
 		card.ConfirmDisable = true
 		s.renderFragment(w, "setup_card", card)
 		return
@@ -85,7 +85,7 @@ func (s *Server) handleSetupDisable(w http.ResponseWriter, r *http.Request) {
 	// and piggyback the out-of-band sidebar-list refresh + HX-Trigger exactly
 	// like Enable's Done fragment (#142), so the removed conversations vanish
 	// from the sidebar without a manual nav.
-	card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(ctx), s.sourceCounts(ctx))
+	card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(ctx), s.sourceCounts(ctx), s.replicaSources(ctx))
 	var buf bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&buf, "setup_card", card); err != nil {
 		s.serverError(w, err)

@@ -69,7 +69,7 @@ type Config struct {
 	// `msgbrowse watch` alongside the server).
 	Watch bool `mapstructure:"watch"`
 
-	// DeviceSync configures multi-device archive synchronization (ADR-0018).
+	// DeviceSync configures multi-device archive synchronization (ADR-0021).
 	// Disabled by default: with the block absent, no sync listener exists and
 	// the loopback-only posture (ADR-0010) is unchanged.
 	DeviceSync DeviceSyncConfig `mapstructure:"device_sync"`
@@ -78,38 +78,33 @@ type Config struct {
 	LogLevel string `mapstructure:"log_level"`
 }
 
-// DeviceSyncConfig configures device pairing and archive sync (ADR-0018 /
-// SPEC-0011). The block is named device_sync — the `sync` word alone belongs
+// DeviceSyncConfig configures device pairing and archive sync (ADR-0021 /
+// SPEC-0014). The block is named device_sync — the `sync` word alone belongs
 // to ADR-0015's export→import pipeline; every device-sync surface uses the
 // `devices` namespace (internal/devices, `msgbrowse devices …`), with this
-// config key as the one spelled-out exception for readability
-// (design.md "Naming: the devices namespace").
+// config key as the one spelled-out exception for readability.
 //
-// Governing: ADR-0018, SPEC-0011 REQ "Sync Listener Posture" — disabled by
-// default, dedicated port distinct from the web UI, web UI bind unchanged.
+// The SPEC-0011 keys this block used to carry (poll_interval, staging_dir)
+// were retired with the bespoke transport (#158): Syncthing owns transfer
+// resumption and convergence, so there is no replica polling loop and no
+// staging area to configure.
+//
+// Governing: ADR-0021, SPEC-0014 REQ "Supervised Daemon Lifecycle" — disabled
+// by default, dedicated P2P port distinct from the web UI, web UI bind
+// unchanged.
 type DeviceSyncConfig struct {
-	// Enabled turns device sync on. False (the default) means no listener,
-	// no pairing windows, and inert sync-state tables.
+	// Enabled turns device sync on. False (the default) means no Syncthing
+	// process, no P2P listener, and inert sync-state tables.
 	Enabled bool `mapstructure:"enabled"`
 
-	// ListenAddr is the sync listener bind address (host:port). Unlike the
-	// web UI it is expected to bind a LAN interface; it must use a port
-	// distinct from listen_addr. The listener itself lands in a later story.
+	// ListenAddr is the Syncthing P2P sync listener bind address (host:port).
+	// Unlike the web UI it is expected to bind a LAN interface; it must use a
+	// port distinct from listen_addr.
 	ListenAddr string `mapstructure:"listen_addr"`
 
-	// DeviceName is this node's human-readable name, shown on peers and
-	// embedded in its certificate. Empty means "derive from the hostname" at
-	// enablement time.
+	// DeviceName is this node's human-readable name, shown on paired peers.
+	// Empty means "derive from the hostname" at enablement time.
 	DeviceName string `mapstructure:"device_name"`
-
-	// PollInterval is the replica's manifest polling fallback interval
-	// (notifications are advisory; polling is the convergence guarantee).
-	PollInterval time.Duration `mapstructure:"poll_interval"`
-
-	// StagingDir is where replicas stream fetched files before verification
-	// and atomic adoption. Empty means "derive a sibling of the archive root
-	// on the same filesystem" at sync time.
-	StagingDir string `mapstructure:"staging_dir"`
 
 	// SyncthingBin is an optional explicit path to the Syncthing binary the
 	// supervisor runs (ADR-0021: Syncthing is the device-sync transfer
@@ -205,8 +200,6 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("device_sync.enabled", false)
 	v.SetDefault("device_sync.listen_addr", ":8788")
 	v.SetDefault("device_sync.device_name", "")
-	v.SetDefault("device_sync.poll_interval", 15*time.Minute)
-	v.SetDefault("device_sync.staging_dir", "")
 	// Optional override for the Syncthing binary the device-sync supervisor
 	// runs (ADR-0021). Empty means "look `syncthing` up on PATH" for the
 	// bring-your-own CLI path; the desktop .app always uses its bundled copy.
@@ -289,11 +282,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("invalid listen_addr %q: %w", c.ListenAddr, err)
 		}
 		if syncPort == webPort {
-			return fmt.Errorf("device_sync.listen_addr %q uses the web UI port %d; the sync listener needs its own port (SPEC-0011)",
+			return fmt.Errorf("device_sync.listen_addr %q uses the web UI port %d; the sync listener needs its own port (SPEC-0014)",
 				c.DeviceSync.ListenAddr, webPort)
-		}
-		if c.DeviceSync.PollInterval <= 0 {
-			return fmt.Errorf("device_sync.poll_interval must be positive, got %v", c.DeviceSync.PollInterval)
 		}
 	}
 	return nil

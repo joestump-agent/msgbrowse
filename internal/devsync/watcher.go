@@ -43,6 +43,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joestump/msgbrowse/internal/devices"
 	"github.com/joestump/msgbrowse/internal/onboard"
 	"github.com/joestump/msgbrowse/internal/syncthing"
 )
@@ -62,6 +63,10 @@ var watchEventTypes = []string{
 	"FolderCompletion",
 	"PendingDevicesChanged",
 	"PendingFoldersChanged",
+	// Peer connection transitions: recorded into the registry's last_seen_at
+	// and the Logs event feed (#158 status surfacing).
+	"DeviceConnected",
+	"DeviceDisconnected",
 }
 
 // Defaults for the watcher's timing knobs; overridable in WatcherOptions
@@ -88,6 +93,9 @@ type WatcherOptions struct {
 	// folder offer provisions into it (so a folder that appears mid-run is
 	// watched immediately). Required.
 	Folders *FolderSet
+	// Notes is the shared device-sync event feed for the Logs page (#158);
+	// nil records nothing (Notes methods are nil-safe).
+	Notes *Notes
 	// Quiet is the debounce window: a burst of folder events within it
 	// coalesces into one import check. 0 means the 3s default.
 	Quiet time.Duration
@@ -106,6 +114,7 @@ type Watcher struct {
 	quiet    time.Duration
 	pollWait time.Duration
 	log      *slog.Logger
+	notes    *Notes
 
 	// folders is the live managed-folder set shared with the pairing
 	// Manager; an event for any folder outside it is ignored outright.
@@ -143,6 +152,11 @@ func NewWatcher(o WatcherOptions) (*Watcher, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	// The watcher's own manager over the shared folder set; the friendly
+	// name is irrelevant here (it only feeds ActivePairing payloads). It
+	// shares the notes ring so accept-side actions land in the same feed.
+	mgr := NewManager(o.API, o.Store, "", o.Folders, log)
+	mgr.SetNotes(o.Notes)
 	return &Watcher{
 		api:      o.API,
 		st:       o.Store,
@@ -150,12 +164,11 @@ func NewWatcher(o WatcherOptions) (*Watcher, error) {
 		quiet:    o.Quiet,
 		pollWait: o.PollTimeout,
 		log:      log.With("component", "devsync"),
+		notes:    o.Notes,
 		folders:  o.Folders,
-		// The watcher's own manager over the shared folder set; the friendly
-		// name is irrelevant here (it only feeds ActivePairing payloads).
-		mgr:    NewManager(o.API, o.Store, "", o.Folders, log),
-		events: make(chan syncthing.Event, 16),
-		done:   make(chan struct{}),
+		mgr:      mgr,
+		events:   make(chan syncthing.Event, 16),
+		done:     make(chan struct{}),
 	}, nil
 }
 
@@ -270,6 +283,8 @@ func (w *Watcher) dispatch(ctx context.Context) {
 				w.acceptPendingDevices(ctx, ev)
 			case "PendingFoldersChanged":
 				w.acceptPendingFolders(ctx, ev)
+			case "DeviceConnected", "DeviceDisconnected":
+				w.recordPeerConnection(ctx, ev)
 			}
 		case <-timer.C:
 			now := time.Now()
@@ -342,10 +357,38 @@ func (w *Watcher) tryImport(ctx context.Context, src string) bool {
 		return true // a hard start failure is terminal for this event burst
 	}
 	w.log.Info("sync import dispatched", "source", src, "phase", string(prog.Phase))
+	w.notes.Add(NoteInfo, "Sync completed for "+src+" — incremental import dispatched")
 	if err := w.st.RecordSyncImport(ctx, folderID, src); err != nil {
 		w.log.Warn("could not record sync import", "folder", folderID, "error", err)
 	}
 	return true
+}
+
+// recordPeerConnection resolves a DeviceConnected/DeviceDisconnected event
+// for the status surfaces (#158): a REGISTRY peer's connect touches its
+// last_seen_at and both transitions land in the Logs event feed. Unpaired
+// devices are ignored — connection chatter about devices the operator never
+// accepted is not msgbrowse state.
+func (w *Watcher) recordPeerConnection(ctx context.Context, ev syncthing.Event) {
+	var data struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		w.log.Warn("undecodable device connection event", "type", ev.Type, "error", err)
+		return
+	}
+	peer, err := w.st.GetSyncPeerByDeviceID(ctx, data.ID)
+	if err != nil {
+		return // not a paired peer; nothing to record
+	}
+	if ev.Type == "DeviceConnected" {
+		if err := w.st.TouchSyncPeerSeen(ctx, peer.DeviceID, ev.Time); err != nil {
+			w.log.Warn("could not record peer last-seen", "device_id", peer.DeviceID, "error", err)
+		}
+		w.notes.Add(NoteInfo, "Peer connected: "+peer.Name+" ("+peer.ShortID()+")")
+		return
+	}
+	w.notes.Add(NoteInfo, "Peer disconnected: "+peer.Name+" ("+peer.ShortID()+")")
 }
 
 // acceptPendingDevices resolves a PendingDevicesChanged event: every added
@@ -416,7 +459,8 @@ func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) 
 		return
 	}
 	for _, add := range data.Added {
-		if _, ok := SourceForFolderID(add.FolderID); !ok {
+		src, ok := SourceForFolderID(add.FolderID)
+		if !ok {
 			w.log.Info("ignoring pending folder offer (folder id outside the managed source enum)",
 				"folder", add.FolderID, "device_id", add.DeviceID)
 			continue
@@ -427,7 +471,7 @@ func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) 
 				"folder", add.FolderID, "device_id", add.DeviceID)
 			continue
 		}
-		folder, err := w.folders.Provision(add.FolderID)
+		folder, created, err := w.folders.Provision(add.FolderID)
 		if err != nil {
 			w.log.Warn("could not provision offered managed folder",
 				"folder", add.FolderID, "device_id", peer.DeviceID, "error", err)
@@ -435,9 +479,24 @@ func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) 
 		}
 		// Persist before the daemon mutations: a restart regenerates config
 		// from the registry (ApplyPeers), so the recorded set is what makes
-		// the acceptance durable rather than flip-flopping away.
+		// the acceptance durable rather than flip-flopping away. A newly
+		// provisioned root also records the offering peer as the source's
+		// IMPORTER (SPEC-0014 REQ "Importer and Replica Roles"): the archive
+		// originates there, this node is its replica, and the Providers card
+		// + Enable guard read exactly this recorded role.
+		changed := false
 		if !containsString(peer.Folders, add.FolderID) {
 			peer.Folders = append(peer.Folders, add.FolderID)
+			changed = true
+		}
+		if created && peer.Roles[src] == "" {
+			if peer.Roles == nil {
+				peer.Roles = make(map[string]string)
+			}
+			peer.Roles[src] = devices.RoleImporter
+			changed = true
+		}
+		if changed {
 			if _, err := w.st.UpsertSyncPeer(ctx, *peer); err != nil {
 				w.log.Warn("could not persist widened folder share",
 					"folder", add.FolderID, "device_id", peer.DeviceID, "error", err)
@@ -456,6 +515,7 @@ func (w *Watcher) acceptPendingFolders(ctx context.Context, ev syncthing.Event) 
 		}
 		w.log.Info("accepted pending folder offer from paired device",
 			"folder", add.FolderID, "device_id", peer.DeviceID)
+		w.notes.Add(NoteInfo, "Accepted folder offer "+add.FolderID+" from "+peer.Name+" ("+peer.ShortID()+")")
 	}
 }
 

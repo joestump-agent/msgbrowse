@@ -88,6 +88,8 @@ type deviceSync struct {
 	Sup     *syncthing.Supervisor
 	Manager *devsync.Manager
 	Watcher *devsync.Watcher
+	// Notes is the shared device-sync event feed the Logs page renders (#158).
+	Notes *devsync.Notes
 }
 
 // startDeviceSync starts the supervised Syncthing engine for the desktop
@@ -159,12 +161,18 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, r
 			name = host
 		}
 	}
+	// One shared event ring: the Manager (pair/unpair) and Watcher (imports,
+	// accepted offers, peer connects) record into it; the Logs page reads it
+	// (#158; SPEC-0014 REQ "Status and Doctor Surfacing").
+	notes := devsync.NewNotes(0)
 	manager := devsync.NewManager(client, st, name, folderSet, log)
+	manager.SetNotes(notes)
 	watcher, err := devsync.NewWatcher(devsync.WatcherOptions{
 		API:      client,
 		Store:    st,
 		Importer: runner,
 		Folders:  folderSet,
+		Notes:    notes,
 		Logger:   log,
 	})
 	if err != nil {
@@ -173,5 +181,5 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, r
 	watcher.Start(ctx)
 
 	log.Info("device sync engine started", "api_addr", sup.APIAddr(), "bundled", res.Bundled)
-	return &deviceSync{Sup: sup, Manager: manager, Watcher: watcher}, nil
+	return &deviceSync{Sup: sup, Manager: manager, Watcher: watcher, Notes: notes}, nil
 }

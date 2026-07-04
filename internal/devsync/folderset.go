@@ -110,28 +110,34 @@ func (s *FolderSet) Contains(folderID string) bool {
 }
 
 // Provision ensures the managed folder for folderID exists — on disk and in
-// this set — and returns it. Idempotent: an already-managed folder is
-// returned as-is. A folder id that does not map onto the fixed source enum is
-// refused with an error; only <data_dir>/archives/<source> roots can ever be
-// materialized (syncthing.ProvisionManagedFolder owns the mkdir, the
-// archive-not-DB validation, and the .stignore/.stfolder preparation).
-func (s *FolderSet) Provision(folderID string) (syncthing.Folder, error) {
+// this set — and returns it, with created reporting whether this call
+// materialized a root the node did not previously manage. Idempotent: an
+// already-managed folder is returned as-is with created=false. The created
+// flag is the ROLE-DETECTION signal (SPEC-0014 REQ "Importer and Replica
+// Roles"): a share whose root had to be provisioned here originates on the
+// peer — the peer is that source's importer and this node its replica — while
+// a share of a root this node already held leaves this node the importer.
+// A folder id that does not map onto the fixed source enum is refused with an
+// error; only <data_dir>/archives/<source> roots can ever be materialized
+// (syncthing.ProvisionManagedFolder owns the mkdir, the archive-not-DB
+// validation, and the .stignore/.stfolder preparation).
+func (s *FolderSet) Provision(folderID string) (f syncthing.Folder, created bool, err error) {
 	src, ok := SourceForFolderID(folderID)
 	if !ok {
-		return syncthing.Folder{}, fmt.Errorf("provision folder %q: id does not map to a known source", folderID)
+		return syncthing.Folder{}, false, fmt.Errorf("provision folder %q: id does not map to a known source", folderID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, f := range s.folders {
-		if f.ID == folderID {
-			return f, nil
+	for _, existing := range s.folders {
+		if existing.ID == folderID {
+			return existing, false, nil
 		}
 	}
-	f, err := syncthing.ProvisionManagedFolder(s.dataDir, src)
+	f, err = syncthing.ProvisionManagedFolder(s.dataDir, src)
 	if err != nil {
-		return syncthing.Folder{}, err
+		return syncthing.Folder{}, false, err
 	}
 	s.folders = append(s.folders, f)
 	s.sources[f.ID] = src
-	return f, nil
+	return f, true, nil
 }

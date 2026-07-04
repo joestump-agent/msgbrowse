@@ -201,6 +201,12 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	if err := requireLoopback(apiAddr); err != nil {
 		return fmt.Errorf("device sync start failed: %w", err)
 	}
+	// Record the live REST address beside the key so sibling processes
+	// (`msgbrowse devices`, `doctor`) can reach this daemon (#158); they
+	// still Ping before trusting it, so a stale file is harmless.
+	if err := persistAPIAddr(s.homeDir, apiAddr); err != nil {
+		return fmt.Errorf("device sync start failed: %w", err)
+	}
 	s.mu.Lock()
 	s.apiAddr = apiAddr
 	s.apiKey = apiKey

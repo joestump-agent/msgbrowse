@@ -293,3 +293,45 @@ func TestClientContextCancellation(t *testing.T) {
 		t.Error("cancellation did not abort the long-poll promptly")
 	}
 }
+
+// TestClientConnectionsAndFolderStatus covers the #158 status surface: the
+// per-device connection map and the per-folder daemon status decode from
+// their REST payload shapes.
+func TestClientConnectionsAndFolderStatus(t *testing.T) {
+	_, client := stubServer(t, map[string]http.HandlerFunc{
+		"/rest/system/connections": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"connections": {
+				"AAA": {"connected": true, "paused": false, "address": "192.168.1.20:22000", "clientVersion": "v2.0.0"},
+				"BBB": {"connected": false, "paused": true}
+			}}`))
+		},
+		"/rest/db/status": func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get("folder"); got != "msgbrowse-signal" {
+				http.Error(w, "wrong folder "+got, http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"state": "syncing", "errors": 1, "pullErrors": 2,
+				"needTotalItems": 7, "needBytes": 1024, "globalBytes": 4096}`))
+		},
+	})
+
+	conns, err := client.Connections(context.Background())
+	if err != nil {
+		t.Fatalf("Connections: %v", err)
+	}
+	a := conns.Connections["AAA"]
+	if !a.Connected || a.Address != "192.168.1.20:22000" || a.ClientVersion != "v2.0.0" {
+		t.Errorf("connection A = %+v", a)
+	}
+	if b := conns.Connections["BBB"]; b.Connected || !b.Paused {
+		t.Errorf("connection B = %+v", b)
+	}
+
+	st, err := client.FolderStatus(context.Background(), "msgbrowse-signal")
+	if err != nil {
+		t.Fatalf("FolderStatus: %v", err)
+	}
+	if st.State != "syncing" || st.Errors != 1 || st.PullErrors != 2 || st.NeedItems != 7 {
+		t.Errorf("folder status = %+v", st)
+	}
+}

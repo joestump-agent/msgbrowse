@@ -1,40 +1,47 @@
-// Package devices is the pairing core for msgbrowse's multi-device archive
-// synchronization.
+// Package devices holds the pairing-payload and identity-validation
+// primitives for msgbrowse's multi-device archive synchronization under
+// ADR-0021 (Syncthing as the sync engine, superseding ADR-0018).
 //
-// Under ADR-0021 (Syncthing as the sync engine, superseding ADR-0018) the
-// LIVE surface of this package is the device-ID era material: the version-2
-// pairing payload (payload_sync.go — this node's Syncthing device ID +
-// folder introduction as QR/manual code), Syncthing device-ID validation
-// (deviceid.go), and the SyncPeer registry type persisted by
-// internal/store's repurposed paired_devices table.
+// Syncthing owns identity (a device ID is the SHA-256 of a device's TLS
+// certificate), transport (mutual TLS, device-ID pinned), and discovery; this
+// package owns only the msgbrowse-side vocabulary layered on top:
 //
-// The remainder — single-use pairing tokens with a bounded TTL, long-lived
-// self-signed TLS identities with SHA-256 fingerprint pinning, the version-1
-// token payload, and the transport-agnostic pairing exchange mounted by
-// internal/devices/listener — is the RETIRED SPEC-0011 machinery, no longer
-// reachable from any command or route, awaiting wholesale removal by the
-// migration story (#158; SPEC-0014 REQ "Migration from SPEC-0011").
+//   - the version-2 pairing payload (payload_sync.go) — this node's Syncthing
+//     device ID plus a managed-folder introduction, rendered as a QR and a
+//     copyable manual code; PUBLIC data, never a secret;
+//   - Syncthing device-ID validation and canonicalization (deviceid.go) —
+//     input hygiene for every externally supplied identifier;
+//   - the SyncPeer registry type persisted by internal/store's repurposed
+//     paired_devices table, including the per-source importer/replica role a
+//     peer plays (SPEC-0014 REQ "Importer and Replica Roles");
+//   - the ErrImporterConflict sentinel (errors.go).
 //
-// This package deliberately contains NO network listener — that lives in
-// internal/devices/listener. Every primitive here is exercised over
-// in-memory transports (net.Pipe TLS conns, custom http.Transport dialers)
-// so the trust machinery is proven independently of any socket. It uses only
-// the standard library's crypto/tls and crypto/x509 — no new dependencies,
-// CGO_ENABLED=0 preserved (ADR-0013).
+// The SPEC-0011 machinery this package used to carry — single-use pairing
+// tokens with a bounded TTL, msgbrowse-issued self-signed TLS identities with
+// fingerprint pinning, the version-1 token payload, and the mTLS LAN listener
+// in internal/devices/listener — was REMOVED by the migration story (#158;
+// SPEC-0014 REQ "Migration from SPEC-0011"): no msgbrowse-issued certificate
+// is generated or pinned for device sync, and no pairing token exists to
+// leak or replay.
+//
+// Everything here is pure Go over the standard library — no crypto beyond
+// the Luhn check in device-ID validation, no network, CGO_ENABLED=0
+// preserved (ADR-0013).
 //
 // # Naming
 //
 // The `sync` verb belongs to ADR-0015's export→import pipeline
-// (`msgbrowse sync`), so this feature adopts the **devices** namespace on
-// every surface (resolving SPEC-0011 design.md's naming open question):
+// (`msgbrowse sync`), so device sync uses the **devices** namespace on every
+// surface:
 //
-//   - Go package:  internal/devices (this package)
+//   - Go packages: internal/devices (this vocabulary), internal/devsync (the
+//     pairing manager + folder-watch worker), internal/syncthing (the
+//     supervised engine)
 //   - Config:      the `device_sync` block (internal/config)
-//   - CLI:         `msgbrowse devices pair|list|unpair|status` (later stories)
-//   - Web routes:  `/settings/devices/...` (later stories)
+//   - CLI:         `msgbrowse devices list|unpair|status`
+//   - Web routes:  `/settings/devices/...`
 //   - Schema:      `paired_devices` + `sync_state` tables (internal/store)
 //
-// Governing: ADR-0018 (multi-device via QR pairing and archive sync),
-// SPEC-0011 REQ "Pairing Initiation", REQ "Pairing Acceptance and Mutual
-// Certificate Pinning", REQ "Error Handling Standards".
+// Governing: ADR-0021, SPEC-0014 REQ "Pairing via Device ID and QR", REQ
+// "Importer and Replica Roles", REQ "Migration from SPEC-0011", §Trust Model.
 package devices

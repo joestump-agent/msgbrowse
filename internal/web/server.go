@@ -26,6 +26,7 @@ import (
 
 	"github.com/joestump/msgbrowse/internal/archivepath"
 	"github.com/joestump/msgbrowse/internal/config"
+	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/imageconv"
 	"github.com/joestump/msgbrowse/internal/setup"
 	"github.com/joestump/msgbrowse/internal/source"
@@ -91,9 +92,19 @@ type Server struct {
 	// deviceSyncEnabled mirrors config device_sync.enabled for the /settings
 	// pairing section's absent state (SPEC-0010; payload contract SPEC-0011).
 	deviceSyncEnabled bool
-	// pairing is the live pairing-window source for /settings' QR section;
-	// nil until the device-sync listener story wires SetPairingSource.
+	// pairing is the live pairing source for /settings' QR section and the
+	// pair/unpair POSTs; nil until serve / the desktop shell wires
+	// SetPairingSource.
 	pairing PairingSource
+	// syncMonitor is the device-sync state source (#158): live peer/folder
+	// status for Settings + /status and the importer/replica role map behind
+	// the Providers cards. nil (sync disabled / browser mode) renders the
+	// labeled absent states. Wired via SetSyncMonitor.
+	syncMonitor SyncMonitor
+	// syncNotes supplies the device-sync event feed for the Logs page (#158),
+	// beside the desktop shell's notes. nil renders no sync section. Wired
+	// via SetSyncNotes.
+	syncNotes func() []devsync.Note
 	// setupDetector overrides the /setup source detector (SPEC-0013); nil uses a
 	// real HOME-rooted setup.NewDetector(). Tests inject a faked HOME; the desktop
 	// layer (#134) injects the genuine macOS Keychain check.
@@ -275,9 +286,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /setup/disable", s.handleSetupDisable)
 	mux.HandleFunc("GET /setup/status/{source}", s.handleSetupStatus)
 	mux.HandleFunc("GET /settings", s.handleSettings)
-	// Device pairing (SPEC-0014 Authentication table): a privileged POST
-	// behind the same checkSetupPOST gate as the Setup POSTs (issue #157).
+	// Device pairing + unpairing (SPEC-0014 Authentication table): privileged
+	// POSTs behind the same checkSetupPOST gate as the Setup POSTs (#157/#158).
 	mux.HandleFunc("POST /settings/devices/pair", s.handleDevicePair)
+	mux.HandleFunc("POST /settings/devices/unpair", s.handleDeviceUnpair)
 	mux.HandleFunc("GET /media/{id}/{path...}", s.handleMedia)
 
 	return gzipMiddleware(securityHeaders(mux))

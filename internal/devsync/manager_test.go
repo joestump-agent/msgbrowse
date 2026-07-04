@@ -23,8 +23,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/joestump/msgbrowse/internal/devices"
+	"github.com/joestump/msgbrowse/internal/store"
 	"github.com/joestump/msgbrowse/internal/syncthing"
 )
 
@@ -189,11 +191,51 @@ func (m *memPeerStore) GetSyncPeerByDeviceID(_ context.Context, deviceID string)
 	return nil, devices.ErrUnknownSyncPeer
 }
 
+func (m *memPeerStore) DeleteSyncPeer(_ context.Context, deviceID string) error {
+	id, err := devices.CanonicalDeviceID(deviceID)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.peers[id]; !ok {
+		return devices.ErrUnknownSyncPeer
+	}
+	delete(m.peers, id)
+	return nil
+}
+
+func (m *memPeerStore) TouchSyncPeerSeen(_ context.Context, deviceID string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.peers[deviceID]; ok {
+		p.LastSeenAt = at
+		m.peers[deviceID] = p
+	}
+	return nil
+}
+
 func (m *memPeerStore) RecordSyncImport(_ context.Context, folderID, source string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.imports = append(m.imports, folderID+"/"+source)
 	return nil
+}
+
+func (m *memPeerStore) SyncImportStates(context.Context) ([]store.SyncImportState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.SyncImportState
+	seen := make(map[string]bool)
+	for _, rec := range m.imports {
+		folderID, src, _ := strings.Cut(rec, "/")
+		if seen[folderID] {
+			continue
+		}
+		seen[folderID] = true
+		out = append(out, store.SyncImportState{FolderID: folderID, Source: src, LastImportAt: time.Now()})
+	}
+	return out, nil
 }
 
 func testLogger() *slog.Logger {

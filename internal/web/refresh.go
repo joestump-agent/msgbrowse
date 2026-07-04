@@ -45,6 +45,12 @@ func (s *Server) handleSetupRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refresh runs the exporters too, so the importer/replica guard applies
+	// exactly as on Enable (#158; SPEC-0014 REQ "Importer and Replica Roles").
+	if s.renderImporterConflict(w, r, src) {
+		return
+	}
+
 	if s.enabler == nil {
 		// No orchestrator wired (browser mode with no resolvable tools): render the
 		// "unavailable" affordance rather than 500ing, exactly as Enable does.
@@ -94,8 +100,15 @@ func (s *Server) handleSetupRefreshAll(w http.ResponseWriter, r *http.Request) {
 	// refreshing, and its own progress region reflects that. Any OTHER
 	// start-time error is counted as a failure to start.
 	present := s.sourcesPresent(r.Context())
+	// Synced-in sources are skipped outright: their importer is a paired peer,
+	// and refreshing here would run the exporters against a replica (#158;
+	// SPEC-0014 REQ "Importer and Replica Roles").
+	replicas := s.replicaSources(r.Context())
 	var started, alreadyRunning, failed int
 	for _, src := range source.All {
+		if _, synced := replicas[src]; synced {
+			continue
+		}
 		if !present[src] && !s.sourceConfigured(src) {
 			continue
 		}

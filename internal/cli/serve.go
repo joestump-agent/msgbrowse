@@ -88,6 +88,11 @@ func newServeCommand() *cobra.Command {
 			}
 			if devSync != nil {
 				srv.SetPairingSource(devSync.Manager)
+				// Status + roles + the Logs event feed (#158; SPEC-0014 REQ
+				// "Status and Doctor Surfacing", REQ "Importer and Replica
+				// Roles"): the same Manager backs all three seams.
+				srv.SetSyncMonitor(devSync.Manager)
+				srv.SetSyncNotes(devSync.Notes.Snapshot)
 			}
 
 			// Convenience for local use: open the UI in the default browser once
@@ -153,8 +158,12 @@ func resolveListenAddr(cmd *cobra.Command, configured string) (string, error) {
 type deviceSyncWorker struct {
 	// Addr is the daemon's loopback REST API address (host:port).
 	Addr string
-	// Manager is the pairing surface wired into web.SetPairingSource.
+	// Manager is the pairing surface wired into web.SetPairingSource, and —
+	// as the SyncMonitor — the status/roles source behind Settings, /status,
+	// and the Providers cards (#158).
 	Manager *devsync.Manager
+	// Notes is the device-sync event feed the Logs page renders (#158).
+	Notes   *devsync.Notes
 	watcher *devsync.Watcher
 	done    <-chan error
 }
@@ -235,12 +244,18 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, r
 	}
 
 	client := sup.Client()
+	// One shared event ring: the Manager (pair/unpair) and Watcher (imports,
+	// accepted offers, peer connects) record into it; the Logs page reads it
+	// (#158; SPEC-0014 REQ "Status and Doctor Surfacing").
+	notes := devsync.NewNotes(0)
 	manager := devsync.NewManager(client, st, deviceName(cfg), folderSet, slog.Default())
+	manager.SetNotes(notes)
 	watcher, err := devsync.NewWatcher(devsync.WatcherOptions{
 		API:      client,
 		Store:    st,
 		Importer: runner,
 		Folders:  folderSet,
+		Notes:    notes,
 		Logger:   slog.Default(),
 	})
 	if err != nil {
@@ -256,7 +271,7 @@ func startDeviceSync(ctx context.Context, cfg *config.Config, st *store.Store, r
 		}
 		done <- err
 	}()
-	return &deviceSyncWorker{Addr: sup.APIAddr(), Manager: manager, watcher: watcher, done: done}, nil
+	return &deviceSyncWorker{Addr: sup.APIAddr(), Manager: manager, Notes: notes, watcher: watcher, done: done}, nil
 }
 
 // deviceName resolves this node's friendly device name: the configured

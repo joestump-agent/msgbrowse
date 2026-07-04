@@ -24,9 +24,9 @@ import (
 )
 
 // UpsertSyncPeer inserts or updates a paired peer keyed by its Syncthing
-// device ID and returns the registry ID. Name and folder set follow the
-// latest pairing; paired_at is preserved on re-pair (the trust decision's
-// original timestamp).
+// device ID and returns the registry ID. Name, folder set, and per-source
+// roles follow the latest pairing; paired_at is preserved on re-pair (the
+// trust decision's original timestamp).
 func (s *Store) UpsertSyncPeer(ctx context.Context, p devices.SyncPeer) (int64, error) {
 	id, err := devices.CanonicalDeviceID(p.DeviceID)
 	if err != nil {
@@ -40,29 +40,80 @@ func (s *Store) UpsertSyncPeer(ctx context.Context, p devices.SyncPeer) (int64, 
 	if err != nil {
 		return 0, fmt.Errorf("upsert sync peer %s: encode folders: %w", devices.ShortDeviceID(id), err)
 	}
+	roles := p.Roles
+	if roles == nil {
+		roles = map[string]string{}
+	}
+	rolesJSON, err := json.Marshal(roles)
+	if err != nil {
+		return 0, fmt.Errorf("upsert sync peer %s: encode roles: %w", devices.ShortDeviceID(id), err)
+	}
 	pairedAt := p.PairedAt
 	if pairedAt.IsZero() {
 		pairedAt = time.Now()
 	}
 	var rowID int64
 	err = s.db.QueryRowContext(ctx, `
-INSERT INTO paired_devices (device_id, name, folders, paired_at)
-VALUES (?, ?, ?, ?)
+INSERT INTO paired_devices (device_id, name, folders, roles, paired_at)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(device_id) DO UPDATE SET
     name    = excluded.name,
-    folders = excluded.folders
-RETURNING id`, id, p.Name, string(foldersJSON), pairedAt.UTC().Format(time.RFC3339)).Scan(&rowID)
+    folders = excluded.folders,
+    roles   = excluded.roles
+RETURNING id`, id, p.Name, string(foldersJSON), string(rolesJSON), pairedAt.UTC().Format(time.RFC3339)).Scan(&rowID)
 	if err != nil {
 		return 0, fmt.Errorf("upsert sync peer %s: %w", devices.ShortDeviceID(id), err)
 	}
 	return rowID, nil
 }
 
+// DeleteSyncPeer removes a paired peer's registry row — the durable half of
+// unpairing (SPEC-0014 REQ "Unpair and Revoke"): the next daemon start
+// regenerates config without the peer, the watcher's scoped auto-accept
+// stops honoring it, and its recorded role claims are released (so a source
+// it was importer for becomes locally Enable-able again). Local archives and
+// the database are NEVER touched here. Returns devices.ErrUnknownSyncPeer
+// (wrapped) when no row matches.
+func (s *Store) DeleteSyncPeer(ctx context.Context, deviceID string) error {
+	id, err := devices.CanonicalDeviceID(deviceID)
+	if err != nil {
+		return fmt.Errorf("delete sync peer: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM paired_devices WHERE device_id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete sync peer %s: %w", devices.ShortDeviceID(id), err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete sync peer %s: %w", devices.ShortDeviceID(id), err)
+	}
+	if n == 0 {
+		return fmt.Errorf("device %s: %w", devices.ShortDeviceID(id), devices.ErrUnknownSyncPeer)
+	}
+	return nil
+}
+
+// TouchSyncPeerSeen records the last time a paired peer was observed
+// connected (the watcher's DeviceConnected handler, #158). Best-effort by
+// contract — a missing row (racing an unpair) is not an error.
+func (s *Store) TouchSyncPeerSeen(ctx context.Context, deviceID string, at time.Time) error {
+	id, err := devices.CanonicalDeviceID(deviceID)
+	if err != nil {
+		return fmt.Errorf("touch sync peer: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE paired_devices SET last_seen_at = ? WHERE device_id = ?`,
+		at.UTC().Format(time.RFC3339), id)
+	if err != nil {
+		return fmt.Errorf("touch sync peer %s: %w", devices.ShortDeviceID(id), err)
+	}
+	return nil
+}
+
 // ListSyncPeers returns every paired peer, ordered by pairing time. The
 // supervisor's config generation and the /settings device list read this.
 func (s *Store) ListSyncPeers(ctx context.Context) ([]devices.SyncPeer, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, device_id, name, folders, paired_at, last_seen_at
+SELECT id, device_id, name, folders, roles, paired_at, last_seen_at
   FROM paired_devices ORDER BY paired_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list sync peers: %w", err)
@@ -90,7 +141,7 @@ func (s *Store) GetSyncPeerByDeviceID(ctx context.Context, deviceID string) (*de
 		return nil, fmt.Errorf("get sync peer: %w", err)
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, device_id, name, folders, paired_at, last_seen_at
+SELECT id, device_id, name, folders, roles, paired_at, last_seen_at
   FROM paired_devices WHERE device_id = ?`, id)
 	p, err := scanSyncPeer(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -104,12 +155,15 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanSyncPeer(sc scanner) (*devices.SyncPeer, error) {
 	var p devices.SyncPeer
-	var foldersJSON, pairedAt, lastSeen string
-	if err := sc.Scan(&p.ID, &p.DeviceID, &p.Name, &foldersJSON, &pairedAt, &lastSeen); err != nil {
+	var foldersJSON, rolesJSON, pairedAt, lastSeen string
+	if err := sc.Scan(&p.ID, &p.DeviceID, &p.Name, &foldersJSON, &rolesJSON, &pairedAt, &lastSeen); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(foldersJSON), &p.Folders); err != nil {
 		return nil, fmt.Errorf("decode folders for peer %s: %w", p.ShortID(), err)
+	}
+	if err := json.Unmarshal([]byte(rolesJSON), &p.Roles); err != nil {
+		return nil, fmt.Errorf("decode roles for peer %s: %w", p.ShortID(), err)
 	}
 	t, err := time.Parse(time.RFC3339, pairedAt)
 	if err != nil {

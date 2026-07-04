@@ -77,11 +77,6 @@ device_sync:
   # like the exporter *_bin keys). Empty = look `syncthing` up on PATH.
   # The desktop .app ignores this and always runs its bundled, pinned copy.
   syncthing_bin: ""
-  # Replica manifest polling fallback interval (notifications are advisory).
-  poll_interval: "15m"
-  # Staging area for fetched files before verification + atomic adoption.
-  # Empty = derive a sibling of the archive root on the same filesystem.
-  staging_dir: ""
 
 # Run an import pass automatically when `serve` starts.
 ingest_on_start: false

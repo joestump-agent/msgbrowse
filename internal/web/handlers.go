@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/store"
 )
 
@@ -156,6 +157,12 @@ type statusData struct {
 	// the signal archive carries a .snapshots directory; false renders one
 	// neutral line instead of the card.
 	HasSnapshotPipeline bool
+	// DeviceSyncEnabled mirrors config device_sync.enabled for the Device
+	// sync card's disabled state; Sync is the live snapshot (nil when sync is
+	// disabled, no monitor is wired, or the registry read failed) — SPEC-0014
+	// REQ "Status and Doctor Surfacing" (#158).
+	DeviceSyncEnabled bool
+	Sync              *devsync.Status
 }
 
 // pageSize is the number of messages per transcript page.
@@ -404,6 +411,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		NewestTS:            newest,
 		SnapshotFootprint:   footprint,
 		HasSnapshotPipeline: len(snaps) > 0 || s.signalSnapshotsDirExists(),
+		DeviceSyncEnabled:   s.deviceSyncEnabled,
+		Sync:                s.syncStatusSnapshot(ctx),
 	})
 }
 

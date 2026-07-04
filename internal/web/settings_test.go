@@ -35,13 +35,15 @@ const (
 )
 
 // staticPairing is a canned PairingSource: the page contract needs "a payload
-// or not", a recordable Pair, and a peer list.
+// or not", a recordable Pair, a recordable Unpair, and a peer list.
 type staticPairing struct {
-	p        *devices.SyncPayload
-	peers    []devices.SyncPeer
-	pairErr  error
-	lastCode string
-	paired   int
+	p         *devices.SyncPayload
+	peers     []devices.SyncPeer
+	pairErr   error
+	unpairErr error
+	lastCode  string
+	paired    int
+	unpaired  []string // device IDs Unpair was called with
 }
 
 func (s *staticPairing) ActivePairing(context.Context) (*devices.SyncPayload, bool) {
@@ -55,6 +57,20 @@ func (s *staticPairing) Pair(_ context.Context, code string) (devices.SyncPeer, 
 	}
 	s.paired++
 	return devices.SyncPeer{DeviceID: testPeerDeviceID, Name: "other-mac"}, nil
+}
+
+func (s *staticPairing) Unpair(_ context.Context, deviceID string) (devices.SyncPeer, error) {
+	s.unpaired = append(s.unpaired, deviceID)
+	if s.unpairErr != nil {
+		return devices.SyncPeer{}, s.unpairErr
+	}
+	for i, p := range s.peers {
+		if p.DeviceID == deviceID {
+			s.peers = append(s.peers[:i], s.peers[i+1:]...)
+			return p, nil
+		}
+	}
+	return devices.SyncPeer{}, devices.ErrUnknownSyncPeer
 }
 
 func (s *staticPairing) Peers(context.Context) ([]devices.SyncPeer, error) {

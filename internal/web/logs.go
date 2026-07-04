@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/onboard"
 	"github.com/joestump/msgbrowse/internal/source"
 )
@@ -111,6 +112,12 @@ type logsData struct {
 	// app. It lives outside the self-polling entries fragment — these are
 	// startup diagnostics, not a live job tail.
 	ShellNotes []ShellNote
+	// SyncNotes is the device-sync event feed (#158; SPEC-0014 REQ "Status
+	// and Doctor Surfacing"): pairs/unpairs, accepted offers, dispatched sync
+	// imports, peer connect/disconnect — recorded by internal/devsync's
+	// bounded ring. Empty when device sync is disabled (no provider wired).
+	// Rendered beside the shell notes, outside the self-polling fragment.
+	SyncNotes []devsync.Note
 }
 
 // handleLogs renders the Logs viewer. GET-only (the route pattern enforces it);
@@ -157,6 +164,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		EnableAvailable: s.enableAvailable(),
 		AnyActive:       anyActive,
 		ShellNotes:      s.shellNoteSnapshot(),
+		SyncNotes:       s.syncNoteSnapshot(),
 	})
 }
 

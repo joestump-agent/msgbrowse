@@ -206,12 +206,28 @@ func DecodeSyncPayload(data []byte) (*SyncPayload, error) {
 // registry — the peer was never explicitly paired on this node.
 var ErrUnknownSyncPeer = errors.New("devices: unknown sync peer")
 
+// Per-source roles a PEER can play, recorded in SyncPeer.Roles (SPEC-0014 REQ
+// "Importer and Replica Roles", carried forward from ADR-0018). The role is
+// from THIS node's perspective: RoleImporter on a peer's row means that peer
+// runs the exporters for the source and this node is its replica, so a local
+// Enable for that source must fail with ErrImporterConflict naming the peer.
+const (
+	// RoleImporter: the peer is the source's importer — it Enables/exports the
+	// source from live data; this node receives the archive via sync and runs
+	// only its own local ingest (the replica).
+	RoleImporter = "importer"
+	// RoleReplica: the peer receives this source's archive from this node —
+	// this node held the managed root before the share, so it is (or may
+	// become) the importer.
+	RoleReplica = "replica"
+)
+
 // SyncPeer is a paired device as persisted in the repurposed paired_devices
 // registry: the peer's Syncthing device ID (its pinned mutual-TLS identity),
-// its friendly name, and the managed archive folders shared with it. This
-// replaces the SPEC-0011 Peer's certificate fingerprint and listener address
-// — Syncthing owns transport and discovery (SPEC-0014 "Schema tables carry
-// Syncthing identifiers").
+// its friendly name, the managed archive folders shared with it, and the
+// per-source role it plays. This replaces the SPEC-0011 Peer's certificate
+// fingerprint and listener address — Syncthing owns transport and discovery
+// (SPEC-0014 "Schema tables carry Syncthing identifiers").
 type SyncPeer struct {
 	// ID is the registry rowid (0 before first persistence).
 	ID int64
@@ -221,12 +237,25 @@ type SyncPeer struct {
 	Name string
 	// Folders are the managed archive folder ids shared with this peer.
 	Folders []string
+	// Roles maps a source id ("signal") to the role the PEER plays for it
+	// (RoleImporter / RoleReplica). Recorded at the moment a folder share is
+	// established: a share whose managed root this node had to PROVISION marks
+	// the peer RoleImporter (the archive originates there); a share of a root
+	// this node already held marks the peer RoleReplica. nil/missing entries
+	// mean "no recorded role" — the source is not role-constrained by this
+	// peer. Deleting the peer's row (unpair) releases its role claims, so an
+	// unpaired importer's sources become locally Enable-able again.
+	Roles map[string]string
 	// PairedAt is when the peer was first paired on this node.
 	PairedAt time.Time
-	// LastSeenAt is the last observed connection time (zero until the status
-	// story, #158, records it).
+	// LastSeenAt is the last observed connection time, touched by the
+	// folder-watch worker on DeviceConnected events (#158). Zero when the peer
+	// has never connected while msgbrowse was watching.
 	LastSeenAt time.Time
 }
+
+// ImporterFor reports whether the peer is the recorded importer for src.
+func (p SyncPeer) ImporterFor(src string) bool { return p.Roles[src] == RoleImporter }
 
 // ShortID returns the peer's short device-ID form for display.
 func (p SyncPeer) ShortID() string { return ShortDeviceID(p.DeviceID) }

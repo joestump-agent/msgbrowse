@@ -115,7 +115,18 @@
           </div>
           <p class="setup-card-detail">{{.Detail}}</p>
           <div class="setup-card-actions">
-            {{- if .ConfirmDisable}}
+            {{- if eq .State "synced"}}
+            {{/* Synced-replica state (#158; SPEC-0014 REQ "Importer and Replica
+                 Roles"): the archive syncs IN from a paired peer — the importer.
+                 No Enable (a second importer would violate single-importer-per-
+                 source), no Refresh (it runs the exporters), no Disable (the
+                 re-ingest worker would repopulate on the next completed sync).
+                 The note names the importer and the way out (unpair). */}}
+            {{- if .HasCounts}}
+            <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{.Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{.Messages}} message{{if ne .Messages 1}}s{{end}}</span>
+            {{- end}}
+            <span class="setup-note">Synced from {{.SyncedFrom}}. Enable and Refresh run on that device; to make this machine the importer, unpair it in Settings first.</span>
+          {{- else if .ConfirmDisable}}
             {{/* Inline two-step Disable confirmation (issue #162): step 1 swapped
                  this state in without mutating anything; only the confirm=1 POST
                  below deletes. Server-rendered htmx, no JS dialogs (CSP-safe). */}}

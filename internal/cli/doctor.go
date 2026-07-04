@@ -29,7 +29,10 @@ import (
 // read-only (Open does create the data dir and apply migrations, which is the
 // only write, and only to msgbrowse's own data dir), reads attachment metadata,
 // stats files in the archive, and — only behind --check-llm — does a bare TCP
-// connect to the configured llm.base_url host:port (no bytes sent).
+// connect to the configured llm.base_url host:port (no bytes sent). With
+// device sync enabled it additionally probes the SUPERVISED Syncthing
+// daemon's loopback REST API (#158; SPEC-0014 REQ "Status and Doctor
+// Surfacing") — machine-local by construction, never an egress.
 
 // glyphs prefixing each check line. Plain text so output stays grep-friendly.
 const (
@@ -109,8 +112,11 @@ func newDoctorCommand() *cobra.Command {
 			"the archive, so no media is browsable. doctor flags that and tells you how\n" +
 			"to re-export.\n" +
 			"\n" +
-			"doctor makes NO network calls except an OPTIONAL TCP-connect reachability\n" +
-			"probe (no data sent) to the single configured llm.base_url, behind --check-llm.",
+			"doctor makes NO off-machine network calls except an OPTIONAL TCP-connect\n" +
+			"reachability probe (no data sent) to the single configured llm.base_url,\n" +
+			"behind --check-llm. With device sync enabled it also reads the local sync\n" +
+			"engine's loopback REST API (peer connections, folder completion) — that\n" +
+			"traffic never leaves this machine.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := resolveConfig()
 			if err != nil {

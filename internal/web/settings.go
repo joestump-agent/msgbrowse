@@ -27,10 +27,12 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/joestump/msgbrowse/internal/devices"
+	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/mcp"
 	"github.com/joestump/msgbrowse/internal/source"
 	"github.com/joestump/msgbrowse/internal/syncthing"
@@ -68,6 +70,11 @@ type PairingSource interface {
 	// persist the peer, add its device to the daemon, share the managed
 	// archive folders (SPEC-0014 "Pairing via Device ID and QR").
 	Pair(ctx context.Context, code string) (devices.SyncPeer, error)
+	// Unpair severs a paired peer: delete its registry row, remove its
+	// device from the daemon, unshare every folder — local archives stay
+	// (SPEC-0014 REQ "Unpair and Revoke"). Returns devices.ErrUnknownSyncPeer
+	// (wrapped) for a device ID with no registry row.
+	Unpair(ctx context.Context, deviceID string) (devices.SyncPeer, error)
 	// Peers lists the explicitly-paired device registry for display.
 	Peers(ctx context.Context) ([]devices.SyncPeer, error)
 }
@@ -105,6 +112,16 @@ type settingsData struct {
 	// "ok", "invalid", "self", "unavailable", "error" — a fixed enum mapped
 	// to text by the template, never request-derived prose.
 	PairResult string
+	// UnpairResult is the post-redirect banner state after an unpair POST:
+	// one of "ok", "invalid", "unknown", "unavailable", "error" — the same
+	// fixed-enum contract as PairResult (#158). The two-step confirm state is
+	// carried per peer (settingsPeer.ConfirmUnpair), not here.
+	UnpairResult string
+	// EngineRunning / EngineStateKnown carry the live engine snapshot for the
+	// pairing section's status line: StateKnown=false (no monitor wired, or
+	// the snapshot failed) renders nothing rather than a guess.
+	EngineRunning    bool
+	EngineStateKnown bool
 	// SetupToken is the per-session token the pair form submits through the
 	// same checkSetupPOST gate the Setup POSTs use (SPEC-0013 §Security,
 	// reused verbatim per issue #157). Empty when no pairing source is wired.
@@ -138,12 +155,34 @@ type settingsPeer struct {
 	// Folders are the human labels of the shared archive folders.
 	Folders  []string
 	PairedAt string
+	// SyncedIn are the labels of sources this node RECEIVES from the peer
+	// (the peer is their importer — SPEC-0014 REQ "Importer and Replica
+	// Roles"); rendered as the roles line.
+	SyncedIn []string
+	// Live connection state from the engine (#158): StateKnown=false (engine
+	// down or no monitor) renders "state unknown", never a fake
+	// "disconnected". LastSeen is the recorded last connection ("" if never).
+	StateKnown bool
+	Connected  bool
+	Paused     bool
+	LastSeen   string
+	// ConfirmUnpair renders this row's inline two-step unpair confirmation
+	// (#158): the first Unpair POST redirects back with this row marked; only
+	// the confirmed second POST (confirm=1) removes anything — the Disable
+	// flow's contract, PRG-shaped for this plain-form page.
+	ConfirmUnpair bool
 }
 
 // pairResultStates is the fixed enum of ?pair= banner states. Anything else
 // in the query string renders nothing.
 var pairResultStates = map[string]bool{
 	"ok": true, "invalid": true, "self": true, "unavailable": true, "error": true,
+}
+
+// unpairResultStates is the fixed enum of ?unpair= banner states (#158);
+// "confirm" is handled separately (it marks a peer row, not a banner).
+var unpairResultStates = map[string]bool{
+	"ok": true, "invalid": true, "unknown": true, "unavailable": true, "error": true,
 }
 
 // handleSettings renders the Connect/Settings page. GET-only (the route
@@ -175,6 +214,20 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if pr := r.URL.Query().Get("pair"); pairResultStates[pr] {
 		data.PairResult = pr
 	}
+	if ur := r.URL.Query().Get("unpair"); unpairResultStates[ur] {
+		data.UnpairResult = ur
+	}
+	// The two-step unpair confirm state (#158): ?unpair=confirm&device=<id>
+	// marks exactly the matching REGISTRY peer's row. The device parameter is
+	// request-derived but strictly validated — it must canonicalize as a
+	// Syncthing device ID AND equal a registry row's — so it selects from the
+	// paired set, never carrying free text into the render.
+	var confirmDeviceID string
+	if r.URL.Query().Get("unpair") == "confirm" {
+		if id, err := devices.CanonicalDeviceID(r.URL.Query().Get("device")); err == nil {
+			confirmDeviceID = id
+		}
+	}
 
 	if s.pairing != nil {
 		if p, ok := s.pairing.ActivePairing(r.Context()); ok {
@@ -191,17 +244,41 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			// Standards": surfaced, not fatal to an unrelated surface).
 			s.log.Warn("settings: could not list paired devices", "error", err)
 		}
-		for _, p := range peers {
-			data.Peers = append(data.Peers, settingsPeer{
-				Name:     p.Name,
-				DeviceID: p.DeviceID,
-				ShortID:  p.ShortID(),
-				Folders:  folderLabels(p.Folders),
-				PairedAt: p.PairedAt.Local().Format("2006-01-02 15:04"),
-			})
+		// Join the live engine snapshot onto the registry rows (#158;
+		// SPEC-0014 REQ "Status and Doctor Surfacing"): per-peer
+		// connected/disconnected without ever opening Syncthing's GUI. A nil
+		// snapshot (engine down, no monitor) leaves StateKnown=false.
+		peerStates := make(map[string]devsync.PeerStatus)
+		if snap := s.syncStatusSnapshot(r.Context()); snap != nil {
+			data.EngineStateKnown = true
+			data.EngineRunning = snap.Running
+			for _, ps := range snap.Peers {
+				peerStates[ps.DeviceID] = ps
+			}
 		}
-		// The pair form posts through the same same-origin + per-session
-		// token gate as the Setup POSTs (issue #157 Security Checklist).
+		for _, p := range peers {
+			row := settingsPeer{
+				Name:          p.Name,
+				DeviceID:      p.DeviceID,
+				ShortID:       p.ShortID(),
+				Folders:       folderLabels(p.Folders),
+				PairedAt:      p.PairedAt.Local().Format("2006-01-02 15:04"),
+				SyncedIn:      importerLabels(p),
+				ConfirmUnpair: p.DeviceID == confirmDeviceID,
+			}
+			if !p.LastSeenAt.IsZero() {
+				row.LastSeen = p.LastSeenAt.Local().Format("2006-01-02 15:04")
+			}
+			if ps, ok := peerStates[p.DeviceID]; ok && ps.StateKnown {
+				row.StateKnown = true
+				row.Connected = ps.Connected
+				row.Paused = ps.Paused
+			}
+			data.Peers = append(data.Peers, row)
+		}
+		// The pair and unpair forms post through the same same-origin +
+		// per-session token gate as the Setup POSTs (issue #157/#158
+		// Security Checklists).
 		tok, err := s.setupTokens.mint()
 		if err != nil {
 			s.serverError(w, err)
@@ -211,6 +288,19 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, r, "settings", data)
+}
+
+// importerLabels lists the human source labels the PEER is the recorded
+// importer for — the sources this node receives from it (SPEC-0014 REQ
+// "Importer and Replica Roles").
+func importerLabels(p devices.SyncPeer) []string {
+	var out []string
+	for _, src := range source.All {
+		if p.ImporterFor(src) {
+			out = append(out, source.Label(src))
+		}
+	}
+	return out
 }
 
 // newSettingsPairing encodes the device-ID payload into its two page
@@ -329,4 +419,64 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 // replays the POST).
 func (s *Server) redirectPairResult(w http.ResponseWriter, r *http.Request, state string) {
 	http.Redirect(w, r, "/settings?pair="+state, http.StatusSeeOther)
+}
+
+// handleDeviceUnpair is POST /settings/devices/unpair — the privileged action
+// that severs a paired device (SPEC-0014 REQ "Unpair and Revoke"; issue
+// #158). It enforces the SAME gate as the privileged Setup POSTs
+// (checkSetupPOST: same-origin + per-session token + MaxBytesReader body cap)
+// BEFORE any work, and it is TWO-STEP like the Providers Disable flow: a POST
+// without confirm=1 removes nothing — it redirects back to /settings with the
+// target row marked for inline confirmation — and only the confirmed second
+// POST unpairs. Both legs follow POST-redirect-GET with fixed-enum ?unpair=
+// states; the only request-derived value in a redirect is the device ID,
+// canonicalized through devices.CanonicalDeviceID (strict format validation)
+// before it is echoed.
+//
+// Unpairing removes the peer's registry row, its daemon device entry, and
+// every folder share — sync to it stops immediately — while local archives
+// and the database stay intact (destructive only to future sync, never to
+// data, per the SPEC-0014 Authentication table).
+func (s *Server) handleDeviceUnpair(w http.ResponseWriter, r *http.Request) {
+	if !s.checkSetupPOST(w, r) {
+		return // 403 already written; nothing was mutated
+	}
+	if s.pairing == nil {
+		s.redirectUnpairResult(w, r, "unavailable")
+		return
+	}
+	deviceID, err := devices.CanonicalDeviceID(r.PostFormValue("device_id"))
+	if err != nil {
+		s.redirectUnpairResult(w, r, "invalid")
+		return
+	}
+
+	if r.PostFormValue("confirm") != "1" {
+		// Step 1: no mutation. Redirect back with the peer's row marked for
+		// the inline confirmation (rendered only if the ID matches a registry
+		// row). The echoed ID is canonical — validated format, no free text.
+		http.Redirect(w, r, "/settings?unpair=confirm&device="+url.QueryEscape(deviceID), http.StatusSeeOther)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	peer, err := s.pairing.Unpair(ctx, deviceID)
+	switch {
+	case err == nil:
+		s.log.Info("device unpaired from settings", "device_id", peer.DeviceID, "name", peer.Name)
+		s.redirectUnpairResult(w, r, "ok")
+	case errors.Is(err, devices.ErrUnknownSyncPeer):
+		s.redirectUnpairResult(w, r, "unknown")
+	default:
+		s.log.Error("device unpair failed", "error", err)
+		s.redirectUnpairResult(w, r, "error")
+	}
+}
+
+// redirectUnpairResult finishes the unpair POST with a 303 back to the
+// settings page carrying the fixed-enum banner state (PRG: a refresh never
+// replays the POST).
+func (s *Server) redirectUnpairResult(w http.ResponseWriter, r *http.Request, state string) {
+	http.Redirect(w, r, "/settings?unpair="+state, http.StatusSeeOther)
 }

@@ -269,6 +269,69 @@ func (c *Client) FolderCompletion(ctx context.Context, folderID, deviceID string
 	return &out, nil
 }
 
+// ConnectionInfo is one device's live connection state from
+// /rest/system/connections — the peer-health signal Settings, /status, the
+// CLI, and doctor surface (SPEC-0014 REQ "Status and Doctor Surfacing":
+// "each paired peer's connection state").
+type ConnectionInfo struct {
+	// Connected reports a live P2P connection to the device.
+	Connected bool `json:"connected"`
+	// Paused reports the device is configured paused (no sync attempted).
+	Paused bool `json:"paused"`
+	// Address is the remote address of the live connection ("" when not
+	// connected).
+	Address string `json:"address"`
+	// ClientVersion is the peer's reported Syncthing version.
+	ClientVersion string `json:"clientVersion"`
+}
+
+// Connections is the /rest/system/connections response subset msgbrowse
+// consumes: per-device connection state keyed by device ID.
+type Connections struct {
+	Connections map[string]ConnectionInfo `json:"connections"`
+}
+
+// Connections reports the daemon's per-device connection states.
+func (c *Client) Connections(ctx context.Context) (*Connections, error) {
+	var out Connections
+	if err := c.do(ctx, "system connections", http.MethodGet, "/rest/system/connections", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// FolderStatus is the /rest/db/status subset msgbrowse consumes for one
+// folder: the daemon's own state token plus its error counters — how a
+// paused, out-of-sync, or permission-broken folder becomes visible in
+// msgbrowse's status and doctor without the user ever opening Syncthing's
+// GUI (SPEC-0014 "A paused or errored sync shows in msgbrowse's status").
+type FolderStatus struct {
+	// State is the daemon's folder state token: "idle", "scanning",
+	// "syncing", "sync-preparing", "error", "unknown", … (an open set across
+	// Syncthing versions; msgbrowse maps it defensively).
+	State string `json:"state"`
+	// StateChanged is when the folder entered its current state.
+	StateChanged time.Time `json:"stateChanged"`
+	// Errors / PullErrors count failed items (permission errors, conflicts).
+	Errors     int `json:"errors"`
+	PullErrors int `json:"pullErrors"`
+	// NeedItems / NeedBytes are the remaining delta for this node.
+	NeedItems   int64 `json:"needTotalItems"`
+	NeedBytes   int64 `json:"needBytes"`
+	GlobalBytes int64 `json:"globalBytes"`
+}
+
+// FolderStatus reports one folder's daemon-side status.
+func (c *Client) FolderStatus(ctx context.Context, folderID string) (*FolderStatus, error) {
+	q := url.Values{"folder": {folderID}}
+	var out FolderStatus
+	op := "folder status " + folderID
+	if err := c.do(ctx, op, http.MethodGet, "/rest/db/status?"+q.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Event is one entry from the daemon's event stream (/rest/events). Data is
 // kept raw: each event type has its own payload shape, and the folder-watch
 // story decodes only the types it subscribes to (FolderCompletion,

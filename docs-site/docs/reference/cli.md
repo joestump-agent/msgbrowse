@@ -143,7 +143,7 @@ The UI has no authentication. Only expose it on a non-loopback address behind yo
 
 Read-only setup diagnostic. Runs checks over your configuration, data directory, archives, and imported attachment rows, printing one line per check (`✓` pass, `⚠` warn, `✗` problem) and a summary. Exits non-zero only if a check fails, so it is safe in scripts. Its headline check catches iMessage exports done without copy mode. See [Troubleshooting](./troubleshooting.md) for every check and its remediation.
 
-doctor makes no network calls except an optional TCP-connect reachability probe (no data sent) of the configured `llm.base_url`, behind `--check-llm`.
+doctor makes no off-machine network calls except an optional TCP-connect reachability probe (no data sent) of the configured `llm.base_url`, behind `--check-llm`. With [device sync](../features/device-sync.md) enabled it also reads the local sync engine's loopback REST API (engine running?, peers connected?, folder completion) — that traffic never leaves the machine.
 
 ```bash
 msgbrowse doctor
@@ -153,6 +153,18 @@ msgbrowse doctor --check-llm
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--check-llm` | bool | `false` | Additionally TCP-probe the configured `llm.base_url` for reachability (the single configured egress; no data is sent). |
+
+## `msgbrowse devices`
+
+Manages [device sync](../features/device-sync.md) peers (Syncthing-based archive sync between your own machines). Pairing itself happens in the web UI's Settings page via device-ID QR codes; the CLI covers the registry and the operational verbs:
+
+```bash
+msgbrowse devices list                # paired peers, shared folders, roles
+msgbrowse devices status              # engine state, peer connections, folder completion
+msgbrowse devices unpair XW4UY46      # sever a peer (full device ID or unique prefix)
+```
+
+`unpair` removes the device from this node's registry and — when the sync engine is running — removes its device entry and folder shares live, so sync to it stops immediately. Archives already synced to this machine stay on disk; only future synchronization stops. `status` and `unpair` reach the supervised engine over its loopback REST API only; nothing leaves the machine.
 
 ## `msgbrowse facts`
 

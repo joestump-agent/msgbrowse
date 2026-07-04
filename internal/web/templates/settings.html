@@ -100,6 +100,30 @@
          flows until both have (SPEC-0014 §Trust Model). */}}
     <section class="status-card space-y-4" aria-labelledby="settings-pairing-heading">
       <h2 id="settings-pairing-heading" class="status-card-title">Device sync</h2>
+      {{- if .UnpairResult}}
+      {{/* Post-redirect banner from the unpair POST (#158): the same
+           fixed-enum PRG contract as the pair banner below. */}}
+      <div class="notice-card" role="status">
+        {{- if eq .UnpairResult "ok"}}
+        <p class="link-card-title">Device unpaired.</p>
+        <p class="link-card-sub">Its folders are unshared and sync to it has stopped. Archives already
+          synced to this device stay on disk and remain browsable.</p>
+        {{- else if eq .UnpairResult "invalid"}}
+        <p class="link-card-title">That device ID was not recognized.</p>
+        <p class="link-card-sub">Use the Unpair control beside a paired device below.</p>
+        {{- else if eq .UnpairResult "unknown"}}
+        <p class="link-card-title">That device is not paired.</p>
+        <p class="link-card-sub">It may already have been unpaired; the list below is current.</p>
+        {{- else if eq .UnpairResult "unavailable"}}
+        <p class="link-card-title">Device sync is not running.</p>
+        <p class="link-card-sub">Enable device sync and restart, then try again.</p>
+        {{- else}}
+        <p class="link-card-title">Unpairing did not fully complete.</p>
+        <p class="link-card-sub">The device was removed from this node's registry, but the sync engine
+          did not accept the change — sync to it stops at the next engine start. See Logs for details.</p>
+        {{- end}}
+      </div>
+      {{- end}}
       {{- if .PairResult}}
       {{/* Post-redirect banner from the pair POST (fixed enum, PRG). Rendered
            server-side on a fresh page load; role=status for assistive tech. */}}
@@ -182,18 +206,73 @@
 
       {{/* The explicitly-paired device registry — the ONLY set the engine
            will ever auto-accept pending requests for (SPEC-0014 §Trust
-           Model). */}}
+           Model) — with each peer's LIVE connection state joined from the
+           engine (#158; SPEC-0014 REQ "Status and Doctor Surfacing") and its
+           Unpair control. Connection changes are server-rendered per load;
+           the region is aria-live so a refreshed state is announced. */}}
       <div>
         <div class="eyebrow mb-1" id="settings-paired-devices-label">Paired devices</div>
+        {{- if and .EngineStateKnown (not .EngineRunning)}}
+        {{/* The engine died mid-session (the pairing payload above may be a
+             cached device ID): say so rather than letting "State unknown"
+             rows stand alone (#158; SPEC-0014 REQ "Status and Doctor
+             Surfacing"). */}}
+        <p class="status-note"><span class="sync-badge sync-badge-err">Engine not running</span>
+          Peer states below are unknown until the sync engine is back — check Logs and restart if it persists.</p>
+        {{- end}}
         {{- if .Peers}}
-        <ul class="space-y-2" aria-labelledby="settings-paired-devices-label">
+        <ul class="space-y-2" aria-labelledby="settings-paired-devices-label" aria-live="polite">
           {{- range .Peers}}
           <li class="notice-card">
-            <p class="link-card-title">{{.Name}} <span class="font-mono">({{.ShortID}})</span></p>
+            <p class="link-card-title">{{.Name}} <span class="font-mono">({{.ShortID}})</span>
+              {{- if .StateKnown}}
+              {{- if .Connected}}
+              <span class="sync-badge sync-badge-ok">Connected</span>
+              {{- else if .Paused}}
+              <span class="sync-badge sync-badge-warn">Paused</span>
+              {{- else}}
+              <span class="sync-badge">Disconnected</span>
+              {{- end}}
+              {{- else}}
+              <span class="sync-badge">State unknown</span>
+              {{- end}}
+            </p>
             <p class="link-card-sub">
               <span class="font-mono">{{.DeviceID}}</span><br>
               {{if .Folders}}Sharing: {{range $i, $l := .Folders}}{{if $i}}, {{end}}{{$l}}{{end}} · {{end}}Paired {{.PairedAt}}
+              {{- if .SyncedIn}} · Imports {{range $i, $l := .SyncedIn}}{{if $i}}, {{end}}{{$l}}{{end}} for this device{{end}}
+              {{- if and .LastSeen (not .Connected)}} · Last seen {{.LastSeen}}{{end}}
             </p>
+            {{- if .ConfirmUnpair}}
+            {{/* Two-step unpair confirmation (#158), the Disable flow's
+                 contract in PRG form: the first POST only redirected back
+                 with this row marked; nothing is removed until the confirm=1
+                 POST below. */}}
+            <p class="setup-note setup-note-warn">Unpair {{.Name}}? Sync to it stops immediately and it
+              is removed from this device's registry. Archives already synced here stay on disk.</p>
+            <div class="setup-card-actions">
+              <form method="post" action="/settings/devices/unpair">
+                <input type="hidden" name="setup_token" value="{{$.SetupToken}}">
+                <input type="hidden" name="device_id" value="{{.DeviceID}}">
+                <input type="hidden" name="confirm" value="1">
+                <button type="submit" class="setup-btn setup-btn-danger"
+                        aria-label="Confirm unpairing {{.Name}}">Unpair {{.Name}}</button>
+              </form>
+              <a class="setup-btn setup-btn-ghost" href="/settings">Cancel</a>
+            </div>
+            {{- else}}
+            <div class="setup-card-actions">
+              {{/* Step 1 of the two-step unpair: a plain same-origin form POST
+                   through the privileged gate; WITHOUT confirm=1 it only
+                   re-renders this row in its confirm state (no mutation). */}}
+              <form method="post" action="/settings/devices/unpair">
+                <input type="hidden" name="setup_token" value="{{$.SetupToken}}">
+                <input type="hidden" name="device_id" value="{{.DeviceID}}">
+                <button type="submit" class="setup-btn setup-btn-ghost"
+                        aria-label="Unpair {{.Name}}">Unpair</button>
+              </form>
+            </div>
+            {{- end}}
           </li>
           {{- end}}
         </ul>

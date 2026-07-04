@@ -40,16 +40,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Journal.DigestPrompt != DefaultDigestPrompt {
 		t.Error("Journal.DigestPrompt should default to DefaultDigestPrompt")
 	}
-	// Device sync (ADR-0018) MUST default off: absent config means no sync
-	// listener and the loopback-only posture unchanged (SPEC-0011).
+	// Device sync (ADR-0021) MUST default off: absent config means no sync
+	// engine, no P2P listener, and the loopback-only posture unchanged
+	// (SPEC-0014).
 	if cfg.DeviceSync.Enabled {
 		t.Error("DeviceSync.Enabled should default false (strictly opt-in)")
 	}
 	if cfg.DeviceSync.ListenAddr != ":8788" {
 		t.Errorf("DeviceSync.ListenAddr = %q, want :8788 (distinct from web UI)", cfg.DeviceSync.ListenAddr)
-	}
-	if cfg.DeviceSync.PollInterval != 15*time.Minute {
-		t.Errorf("DeviceSync.PollInterval = %v, want 15m", cfg.DeviceSync.PollInterval)
 	}
 }
 
@@ -126,14 +124,9 @@ func TestValidate(t *testing.T) {
 			c.DeviceSync.Enabled = true
 			c.DeviceSync.ListenAddr = "127.0.0.1:http"
 		}, true},
-		{"device sync non-positive poll interval", func(c *Config) {
-			c.DeviceSync.Enabled = true
-			c.DeviceSync.PollInterval = 0
-		}, true},
 		{"device sync disabled skips its checks", func(c *Config) {
 			c.DeviceSync.Enabled = false
 			c.DeviceSync.ListenAddr = ""
-			c.DeviceSync.PollInterval = 0
 		}, false},
 	}
 	for _, tt := range tests {

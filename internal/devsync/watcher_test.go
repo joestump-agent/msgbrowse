@@ -32,17 +32,21 @@ import (
 // fakeAPI scripts the API surface the watcher consumes: an event queue fed by
 // tests, a settable per-folder completion, and recorded config mutations.
 type fakeAPI struct {
-	mu         sync.Mutex
-	queue      []syncthing.Event
-	completion map[string]syncthing.Completion
-	devices    []syncthing.DeviceConfig
-	folders    []syncthing.FolderConfig
-	nextID     int64
+	mu           sync.Mutex
+	queue        []syncthing.Event
+	completion   map[string]syncthing.Completion
+	folderStatus map[string]syncthing.FolderStatus
+	connections  map[string]syncthing.ConnectionInfo
+	devices      []syncthing.DeviceConfig
+	folders      []syncthing.FolderConfig
+	nextID       int64
 }
 
 func newFakeAPI() *fakeAPI {
 	return &fakeAPI{
-		completion: map[string]syncthing.Completion{},
+		completion:   map[string]syncthing.Completion{},
+		folderStatus: map[string]syncthing.FolderStatus{},
+		connections:  map[string]syncthing.ConnectionInfo{},
 		folders: []syncthing.FolderConfig{
 			{ID: "msgbrowse-signal", Path: "/tmp/x/archives/signal", Type: "sendreceive"},
 			{ID: "msgbrowse-imessage", Path: "/tmp/x/archives/imessage", Type: "sendreceive"},
@@ -102,6 +106,26 @@ func (f *fakeAPI) FolderCompletion(_ context.Context, folderID, _ string) (*sync
 		return nil, fmt.Errorf("no completion scripted for %s", folderID)
 	}
 	return &c, nil
+}
+
+func (f *fakeAPI) FolderStatus(_ context.Context, folderID string) (*syncthing.FolderStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st, ok := f.folderStatus[folderID]
+	if !ok {
+		return &syncthing.FolderStatus{State: "idle"}, nil
+	}
+	return &st, nil
+}
+
+func (f *fakeAPI) Connections(context.Context) (*syncthing.Connections, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	conns := make(map[string]syncthing.ConnectionInfo, len(f.connections))
+	for id, ci := range f.connections {
+		conns[id] = ci
+	}
+	return &syncthing.Connections{Connections: conns}, nil
 }
 
 // Events drains the scripted queue; with nothing queued it blocks up to the

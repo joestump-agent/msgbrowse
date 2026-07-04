@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/joestump/msgbrowse/internal/config"
 	"github.com/joestump/msgbrowse/internal/syncthing"
@@ -20,10 +19,9 @@ func testDeviceCfg(t *testing.T, name string) *config.Config {
 		ListenAddr: "127.0.0.1:8787",
 		LogLevel:   "error",
 		DeviceSync: config.DeviceSyncConfig{
-			Enabled:      true,
-			ListenAddr:   "127.0.0.1:0",
-			DeviceName:   name,
-			PollInterval: 15 * time.Minute,
+			Enabled:    true,
+			ListenAddr: "127.0.0.1:0",
+			DeviceName: name,
 		},
 	}
 }

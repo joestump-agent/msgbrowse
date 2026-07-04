@@ -82,6 +82,18 @@ func (s *Server) handleSetupEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Importer/replica role guard (#158; SPEC-0014 REQ "Importer and Replica
+	// Roles"): a source synced in from a paired peer already HAS an importer —
+	// that peer — and there is exactly one importer per source across the
+	// paired set. Enabling here would register a second one, so the POST is
+	// refused with a conflict message naming the existing importer BEFORE any
+	// subprocess starts (the SPEC-0014 "Single importer per source is
+	// enforced" scenario). The synced card renders no Enable button; this
+	// guard covers a stale page or a hand-crafted POST.
+	if s.renderImporterConflict(w, r, src) {
+		return
+	}
+
 	if s.enabler == nil {
 		// No orchestrator wired (e.g. browser mode with no resolvable tools):
 		// render the source's card with an "unavailable" note rather than 500ing.
@@ -239,7 +251,7 @@ func (s *Server) renderProgress(w http.ResponseWriter, r *http.Request, src stri
 		// mint-at-render contract. Store-presence now reports the source Enabled, so
 		// setupCardFor renders the Enabled card.
 		if cardTok, err := s.setupTokens.mint(); err == nil {
-			card := s.setupCardFor(s.detector(), src, cardTok, s.sourcesPresent(r.Context()), s.sourceCounts(r.Context()))
+			card := s.setupCardFor(s.detector(), src, cardTok, s.sourcesPresent(r.Context()), s.sourceCounts(r.Context()), s.replicaSources(r.Context()))
 			card.SwapOOB = true
 			if oob, err := s.renderOOB("setup_card", card); err == nil {
 				data.CardOOB = oob
@@ -284,6 +296,36 @@ func (s *Server) renderProgressError(w http.ResponseWriter, r *http.Request, src
 		Failed:  true,
 		Token:   tok,
 	})
+}
+
+// renderImporterConflict enforces the single-importer-per-source invariant on
+// the privileged Enable/Refresh POSTs: when src is synced in from a paired
+// peer it renders the conflict as a failed progress fragment — naming the
+// existing importer, per the SPEC-0014 scenario — and reports true so the
+// caller returns without starting anything. The underlying sentinel is
+// devices.ErrImporterConflict; the message carries its meaning to the page.
+func (s *Server) renderImporterConflict(w http.ResponseWriter, r *http.Request, src string) bool {
+	rep, ok := s.replicaSources(r.Context())[src]
+	if !ok {
+		return false
+	}
+	tok, err := s.setupTokens.mint()
+	if err != nil {
+		s.serverError(w, err)
+		return true
+	}
+	msg := source.Label(src) + " already has an importer: it syncs in from " + rep.PeerName +
+		" (" + rep.PeerShortID + "). A source has exactly one importer across paired devices — this replica imports each completed sync automatically. To make this machine the importer, unpair that device first."
+	s.renderFragment(w, "setup_progress", progressData{
+		Source:  src,
+		Label:   source.Label(src),
+		Phase:   string(onboard.PhaseFailed),
+		Message: msg,
+		ErrText: msg,
+		Failed:  true,
+		Token:   tok,
+	})
+	return true
 }
 
 // renderEnableUnavailable renders the "Enable unavailable" fragment (no Enabler
