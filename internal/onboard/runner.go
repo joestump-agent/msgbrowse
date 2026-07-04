@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,10 +44,60 @@ type Progress struct {
 	// Err is the terminal error when Phase == PhaseFailed or PhaseCancelled; nil
 	// otherwise. It wraps one of the package sentinels (errors.Is-matchable).
 	Err error
+	// Log is the diagnostic record of the exporter invocation for this job — the
+	// argv, exit status, captured exporter stderr/stdout tail, and (on success)
+	// the import summary. It is populated once the export step has run so the Logs
+	// viewer (issue #151) can show WHY a run failed, not just "exit status N". It
+	// is the zero value before the exporter runs. It is TOOL output only — never
+	// message content — and lives only in memory.
+	Log JobLog
 	// StartedAt / UpdatedAt bound the job's lifetime for the UI.
 	StartedAt time.Time
 	UpdatedAt time.Time
 }
+
+// JobLog is the captured diagnostic record of one export→import job, surfaced by
+// the Logs viewer (issue #151). It carries what a user needs to diagnose an
+// Enable/Refresh failure — the exact exporter command line, its exit status, and
+// the tail of its combined stdout+stderr — without ever recording message
+// content (the exporter's output is argv echoes, progress, and error text only).
+// It is a value type copied into every Progress snapshot, so the web layer reads
+// it without holding the runner lock.
+type JobLog struct {
+	// Tool is the resolved absolute exporter path used as argv[0].
+	Tool string
+	// Args is the app-assembled argv (flags + staging dir + detected source
+	// paths) — never client input.
+	Args []string
+	// Output is the exporter's captured, BOUNDED combined stdout+stderr tail. It
+	// is present whether the run succeeded or failed; on a non-zero exit it holds
+	// the stderr that explains the failure (the WhatsApp exit-2 argparse message).
+	Output string
+	// ExitStatus is a human-readable exit description: "0" on success, "exit
+	// status N" (or the exec error string) on failure, "" before the exporter ran.
+	ExitStatus string
+	// Summary is the import outcome once the job completed (conversations/messages
+	// added), for the Logs viewer's import-counts line. Zero until PhaseDone.
+	Summary ImportResult
+}
+
+// ArgvLine renders the exporter command line as a single space-joined string for
+// display, a template-safe accessor (the Logs view shows the exact command that
+// ran). It does no shell quoting — it is a human-readable echo, not something
+// re-executed.
+func (l JobLog) ArgvLine() string {
+	if l.Tool == "" {
+		return ""
+	}
+	parts := make([]string, 0, len(l.Args)+1)
+	parts = append(parts, l.Tool)
+	parts = append(parts, l.Args...)
+	return strings.Join(parts, " ")
+}
+
+// HasOutput reports whether any exporter output was captured, so a template can
+// gate the output block without inspecting the string inline.
+func (l JobLog) HasOutput() bool { return l.Output != "" }
 
 // Active reports whether the job is still running (a non-terminal phase). The UI
 // polls while Active is true and stops once a terminal phase is reached.
@@ -96,6 +147,10 @@ type Runner struct {
 	resolver ToolResolver
 	runExec  ExecRunner
 	importer Importer
+	// sources resolves the detected LIVE source location (WhatsApp container DB +
+	// media dir) threaded into the export argv (issue #150). nil means "no source
+	// needs an explicit path" — the exporters read their own well-known dirs.
+	sources SourceResolver
 	// permission probes the OS consent gate for a source before spawning the
 	// exporter; it returns (granted, resource). The desktop shell injects the
 	// genuine macOS detector; tests inject a fake. nil means "skip the probe"
@@ -122,6 +177,10 @@ type Config struct {
 	Exec ExecRunner
 	// Importer imports an adopted managed root into the store. Required.
 	Importer Importer
+	// Sources optionally resolves the detected live source location (WhatsApp
+	// container DB + media dir) for the export argv (issue #150). nil is fine for
+	// sources whose exporter reads its own well-known directory (Signal/iMessage).
+	Sources SourceResolver
 	// DataDir is the app-owned data dir; managed roots are computed from it
 	// (<DataDir>/archives/<source>). Required.
 	DataDir string
@@ -154,6 +213,7 @@ func NewRunner(cfg Config) (*Runner, error) {
 		resolver:   cfg.Resolver,
 		runExec:    cfg.Exec,
 		importer:   cfg.Importer,
+		sources:    cfg.Sources,
 		permission: cfg.Permission,
 		dataDir:    cfg.DataDir,
 		log:        log,
@@ -281,7 +341,9 @@ func (r *Runner) Shutdown() {
 
 // update publishes a phase/message transition for a source under the lock. It is
 // the only writer of live job progress, so all mutation is serialized. A
-// terminal phase records Err; the timestamp always advances.
+// terminal phase records Err; the timestamp always advances. It preserves any
+// JobLog already recorded (setLog is the only writer of Log), so a failure after
+// the exporter ran still carries the captured stderr into the terminal state.
 func (r *Runner) update(src string, phase Phase, msg string, res ImportResult, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -293,6 +355,23 @@ func (r *Runner) update(src string, phase Phase, msg string, res ImportResult, e
 	j.progress.Message = msg
 	j.progress.Result = res
 	j.progress.Err = err
+	j.progress.UpdatedAt = time.Now()
+}
+
+// setLog records the captured exporter diagnostic log for a source under the
+// lock. It is the only writer of Progress.Log, so the export capture and the
+// phase transitions serialize on the same mutex without racing. It merges into
+// the existing snapshot so a later update() (the terminal phase) preserves the
+// log the export step captured — the Logs viewer surfaces it whether the run
+// went on to succeed or failed (issue #151).
+func (r *Runner) setLog(src string, log JobLog) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok := r.jobs[src]
+	if !ok {
+		return
+	}
+	j.progress.Log = log
 	j.progress.UpdatedAt = time.Now()
 }
 
@@ -360,13 +439,40 @@ func (r *Runner) execute(jobCtx context.Context, src string, mode jobMode) {
 		r.fail(src, wrapSentinel(err, ErrExportFailed), fmt.Sprintf("could not prepare staging: %v", err))
 		return
 	}
-	args, err := ExportArgs(src, staging)
+	// Resolve the detected live source location (WhatsApp container DB + media
+	// dir) for the export argv (issue #150). A resolution failure is an export
+	// failure — surfaced with the reason rather than invoking the exporter with a
+	// missing `-d` (which exits 2 with an opaque message).
+	exportSrc, err := r.resolveSource(jobCtx, src)
 	if err != nil {
 		_ = discardStaging(staging)
-		r.fail(src, ErrUnknownSource, fmt.Sprintf("cannot build export command: %v", err))
+		r.fail(src, wrapSentinel(err, ErrExportFailed), fmt.Sprintf("could not resolve %s source location: %v", source.Label(src), err))
 		return
 	}
-	if err := r.runExec(jobCtx, tool, env, args...); err != nil {
+	args, err := ExportArgs(src, staging, exportSrc)
+	if err != nil {
+		_ = discardStaging(staging)
+		// ExportArgs classifies its own failure (unknown source vs. a WhatsApp
+		// Enable with no detected DB); preserve that sentinel so the UI/Logs view
+		// shows the right reason. Record the intended argv shape in the log too.
+		sentinel := ErrExportFailed
+		if errors.Is(err, ErrUnknownSource) {
+			sentinel = ErrUnknownSource
+		}
+		r.setLog(src, JobLog{Tool: tool, Args: args, ExitStatus: err.Error()})
+		r.fail(src, wrapSentinel(err, sentinel), fmt.Sprintf("cannot build %s export command: %v", source.Label(src), err))
+		return
+	}
+	out, err := r.runExec(jobCtx, tool, env, args...)
+	// Capture the exporter's argv + combined output + exit status regardless of
+	// outcome, so the Logs viewer can show WHY a run failed (issue #151), not just
+	// "exit status N". This is TOOL output only, never message content.
+	log := JobLog{Tool: tool, Args: args, Output: out, ExitStatus: "0"}
+	if err != nil {
+		log.ExitStatus = err.Error()
+	}
+	r.setLog(src, log)
+	if err != nil {
 		_ = discardStaging(staging)
 		if r.cancelled(jobCtx) {
 			r.cancel(src)
@@ -421,6 +527,9 @@ func (r *Runner) execute(jobCtx context.Context, src string, mode jobMode) {
 		verb = "Refreshed"
 		logMsg = "onboard refresh complete"
 	}
+	// Fold the import summary into the captured log so the Logs viewer shows the
+	// import counts beside the exporter command + exit status (issue #151).
+	r.setLog(src, JobLog{Tool: tool, Args: args, Output: out, ExitStatus: "0", Summary: res})
 	r.update(src, PhaseDone,
 		fmt.Sprintf("%s %s — %d conversations, %d messages added", verb, source.Label(src), res.ConversationsChanged, res.MessagesAdded),
 		res, nil)
@@ -457,6 +566,17 @@ func (r *Runner) resolveEnv(ctx context.Context, src, toolPath string) ([]string
 		return nil, nil
 	}
 	return er.EnvForTool(ctx, src, toolPath)
+}
+
+// resolveSource resolves the detected live source location (WhatsApp container
+// DB + media dir) for the export argv (issue #150). A nil resolver — or a source
+// that reads its own well-known directory (Signal/iMessage) — yields the zero
+// ExportSource, which ExportArgs interprets as "no explicit source path".
+func (r *Runner) resolveSource(ctx context.Context, src string) (ExportSource, error) {
+	if r.sources == nil {
+		return ExportSource{}, nil
+	}
+	return r.sources.ResolveSource(ctx, src)
 }
 
 // fail records a terminal PhaseFailed with a sentinel-wrapped error and logs it

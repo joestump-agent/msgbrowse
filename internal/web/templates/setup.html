@@ -36,7 +36,7 @@
 {{define "setup_content"}}<title>{{.Title}}</title>
     <main id="main-content" class="flex-1">
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
-    <h1 class="screen-h1">Setup</h1>
+    <h1 class="screen-h1">Providers</h1>
     <p class="screen-sub">msgbrowse looks for Signal, iMessage, and WhatsApp on this Mac. Enable a
       detected source to import its history — everything stays on this machine.</p>
 
@@ -74,8 +74,8 @@
     {{- end}}
 
     <p class="setup-footnote">
-      {{- if .AnyActionable}}Detected sources can be enabled from here — enabling runs the bundled exporter and imports the result. Setup stays reachable from the sidebar at any time.
-      {{- else}}No sources are ready to enable on this machine yet. Setup stays reachable from the sidebar at any time.{{end}}
+      {{- if .AnyActionable}}Detected sources can be enabled from here — enabling runs the bundled exporter and imports the result. Providers stays reachable from the sidebar at any time.
+      {{- else}}No sources are ready to enable on this machine yet. Providers stays reachable from the sidebar at any time.{{end}}
     </p>
   </div>
     </main>
@@ -86,7 +86,7 @@
      <li>). It carries its own EnableAvailable + Token so it stands alone. */}}
 {{define "setup_card"}}
       <li id="setup-card-{{.Source}}" class="setup-card setup-card-{{.State}}"
-          aria-label="{{.Label}}: {{.StateLabel}}">
+          aria-label="{{.Label}}: {{.StateLabel}}"{{if .SwapOOB}} hx-swap-oob="true"{{end}}>
         <span class="setup-card-icon {{sourceSlug .Source}}" aria-hidden="true">
           {{- if eq .Source "signal"}}{{template "icon-chat-bubble" $}}
           {{- else if eq .Source "imessage"}}{{template "icon-chat-solid" $}}
@@ -269,7 +269,7 @@
     <p class="setup-progress-line">{{.Message}}</p>
     {{- end}}
   </div>
-  {{- if .Done}}{{.SidebarOOB}}{{end}}
+  {{- if .Done}}{{.SidebarOOB}}{{.CardOOB}}{{.NavbarOOB}}{{end}}
   {{- end}}
 {{end}}
 

@@ -271,7 +271,7 @@ func TestSetupPageRendersAllSourcesRefreshWhenEnabled(t *testing.T) {
 	fe := &fakeEnabler{}
 	srv.SetEnabler(fe)
 
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 	if !contains(body, `hx-post="/setup/refresh-all"`) {
 		t.Error("/setup with an Enabled source should render the all-sources Refresh control")
 	}
@@ -288,7 +288,7 @@ func TestSetupPageRendersAllSourcesRefreshWhenEnabled(t *testing.T) {
 func TestSetupPageHidesRefreshWhenNoneEnabled(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 	if contains(body, `hx-post="/setup/refresh-all"`) {
 		t.Error("/setup with no Enabled source should NOT render the all-sources Refresh control")
 	}

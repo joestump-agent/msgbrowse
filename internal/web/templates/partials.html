@@ -31,7 +31,7 @@
         <span class="navbar-wordmark">msgbrowse</span>
       </a>
       <div class="flex-1"></div>
-      <span class="navbar-counts font-mono hidden sm:inline" title="Global archive totals">{{len .Conversations}} conversations · {{.TotalMessages}} messages</span>
+      <span id="navbar-counts" class="navbar-counts font-mono hidden sm:inline" title="Global archive totals">{{len .Conversations}} conversations · {{.TotalMessages}} messages</span>
       <button type="button" data-theme-toggle class="navbar-toggle ml-3" title="Toggle light/dark" aria-label="Toggle theme">{{template "icon-theme" .}}</button>
     </header>
 {{/* <main id="main-content"> is owned by each page's *_content define (not by
@@ -63,12 +63,13 @@
           <input type="search" id="sidebar-filter" class="grow bg-transparent outline-none text-sm" placeholder="Filter conversations" autocomplete="off" aria-label="Filter conversations" aria-controls="sidebar-conversations">
         </label>
       </div>
-      {{/* Primary nav links. No Journal link yet (the route would 404). */}}
+      {{/* Primary nav links. No Journal link yet (the route would 404). "Status &
+           backups" moved under Settings (it is a diagnostic surface, not a primary
+           destination); "Providers" is the renamed Setup surface at /providers. */}}
       <nav class="px-2 pb-2 flex flex-col gap-0.5">
         <a href="/search" class="sidebar-link">{{template "icon-search" .}} <span>Search</span></a>
         <a href="/gallery" class="sidebar-link">{{template "icon-photo" .}} <span>Media</span></a>
-        <a href="/status" class="sidebar-link">{{template "icon-server" .}} <span>Status &amp; backups</span></a>
-        <a href="/setup" class="sidebar-link">{{template "icon-plus-circle" .}} <span>Setup</span></a>
+        <a href="/providers" class="sidebar-link">{{template "icon-plus-circle" .}} <span>Providers</span></a>
         <a href="/settings" class="sidebar-link">{{template "icon-settings" .}} <span>Settings</span></a>
       </nav>
       {{/* PINNED section (REQ-0006-010): pinned conversations float above the
@@ -123,6 +124,15 @@
   {{- end}}
 </ul>
 {{end}}
+
+{{/* navbar_counts_oob updates the top-right global counts out-of-band after a
+     Setup import (issue #149). The shell navbar is not re-rendered on an htmx
+     fragment swap, so without this the counts stay "0 conversations · 0 messages"
+     even though the sidebar now has conversations. It carries the same #navbar-
+     counts id + hx-swap-oob so htmx replaces the live span in place. Values are
+     server-computed integers — html/template escaping is the only encoding
+     needed. */}}
+{{define "navbar_counts_oob"}}<span id="navbar-counts" class="navbar-counts font-mono hidden sm:inline" title="Global archive totals" hx-swap-oob="true">{{len .Conversations}} conversations · {{.TotalMessages}} messages</span>{{end}}
 
 {{/* conv_row renders a single sidebar conversation row (REQ-0006-003/004). It is
      shared verbatim by the PINNED and CONVERSATIONS sections so the two lists are

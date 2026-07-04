@@ -327,7 +327,7 @@ func TestSetupPageMintsToken(t *testing.T) {
 	fe := &fakeEnabler{}
 	srv.SetEnabler(fe)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), true)) // iMessage Ready → live button
-	body := get(t, srv, "/setup").Body.String()
+	body := get(t, srv, "/providers").Body.String()
 	if !contains(body, `hx-post="/setup/enable"`) {
 		t.Error("/setup with an Enabler wired should render a live Enable button")
 	}

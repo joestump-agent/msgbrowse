@@ -24,7 +24,6 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"html/template"
 	"net/http"
@@ -170,6 +169,16 @@ type progressData struct {
 	// Done fragment so the newly-imported conversations appear immediately (#142).
 	// Empty for every non-Done render.
 	SidebarOOB template.HTML
+	// CardOOB is the pre-rendered out-of-band swap of this source's Setup card,
+	// appended to a Done fragment so the card flips to the Enabled state and the
+	// stale "Needs permission" badge cannot linger beside "✓ Enabled" (issue #149).
+	// Empty for every non-Done render.
+	CardOOB template.HTML
+	// NavbarOOB is the pre-rendered out-of-band swap of the top-right global
+	// counts, appended to a Done fragment so "N conversations · N messages"
+	// reflects the just-imported totals without a manual nav (issue #149). Empty
+	// for every non-Done render.
+	NavbarOOB template.HTML
 }
 
 // setupImportedTrigger is the HX-Trigger event name emitted on a successful
@@ -208,40 +217,61 @@ func (s *Server) renderProgress(w http.ResponseWriter, r *http.Request, src stri
 	}
 
 	if data.Done {
-		// Payoff moment (#142): the import just landed, so tell the client to
-		// refresh the sidebar (HX-Trigger) AND swap the fresh conversation list in
-		// out-of-band, so the new conversations show up without a manual nav. A
-		// listing failure is not fatal to reporting Done — fall back to the trigger
-		// alone rather than turning a successful import into an error.
+		// Payoff moment (#142/#149): the import just landed, so tell the client to
+		// refresh the sidebar (HX-Trigger) AND piggyback out-of-band swaps in the
+		// same response so, without a manual nav: the new conversations show in the
+		// sidebar, the source's card flips to Enabled (so the stale "Needs
+		// permission" badge can't linger — #149), and the navbar global counts
+		// reflect the new totals. Each OOB swap is best-effort: a render failure
+		// falls back to the trigger-driven refresh rather than turning a successful
+		// import into an error.
 		w.Header().Set("HX-Trigger", setupImportedTrigger)
-		if oob, err := s.sidebarOOB(r.Context()); err == nil {
-			data.SidebarOOB = oob
+		base, berr := s.baseData(r.Context(), "", 0)
+		if berr != nil {
+			s.log.Warn("setup: could not load base data for post-import OOB swaps", "error", berr)
 		} else {
-			s.log.Warn("setup: could not render sidebar refresh after import", "error", err)
+			if oob, err := s.renderOOB("sidebar_lists_oob", base); err == nil {
+				data.SidebarOOB = oob
+			} else {
+				s.log.Warn("setup: could not render sidebar refresh after import", "error", err)
+			}
+			if oob, err := s.renderOOB("navbar_counts_oob", base); err == nil {
+				data.NavbarOOB = oob
+			} else {
+				s.log.Warn("setup: could not render navbar counts after import", "error", err)
+			}
+		}
+		// Flip the source's Setup card to Enabled out-of-band (#149). Mint a fresh
+		// token for the swapped-in card's own controls (Refresh), per the
+		// mint-at-render contract. Store-presence now reports the source Enabled, so
+		// setupCardFor renders the Enabled card.
+		if cardTok, err := s.setupTokens.mint(); err == nil {
+			card := s.setupCardFor(s.detector(), src, cardTok, s.sourcesPresent(r.Context()))
+			card.SwapOOB = true
+			if oob, err := s.renderOOB("setup_card", card); err == nil {
+				data.CardOOB = oob
+			} else {
+				s.log.Warn("setup: could not render enabled card after import", "error", err)
+			}
+		} else {
+			s.log.Warn("setup: could not mint token for post-import card swap", "error", err)
 		}
 	}
 	s.renderFragment(w, "setup_progress", data)
 }
 
-// sidebarOOB renders the current conversation list as the out-of-band sidebar
-// swap appended to the Done fragment (#142). It returns the pre-rendered,
-// already-escaped HTML for the #sidebar-conversations and #sidebar-pinned lists
-// carrying hx-swap-oob so htmx replaces the live sidebar in place. It runs the
-// same ListConversations the full-page shell uses, so the swapped rows are
-// pixel-identical to a fresh load.
-func (s *Server) sidebarOOB(ctx context.Context) (template.HTML, error) {
-	base, err := s.baseData(ctx, "", 0)
-	if err != nil {
-		return "", err
-	}
+// renderOOB executes one out-of-band swap template into pre-rendered, already-
+// escaped HTML for interpolation into the Done fragment (#142/#149). It backs the
+// sidebar-list, navbar-counts, and Setup-card OOB swaps: each define emits an
+// element carrying its stable id + hx-swap-oob="true", so htmx replaces the live
+// element in place. Every value is server-composed from trusted partials (message
+// bodies are never in the sidebar/navbar/card), so it is safe to mark as HTML.
+func (s *Server) renderOOB(name string, data any) (template.HTML, error) {
 	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, "sidebar_lists_oob", base); err != nil {
+	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		return "", err
 	}
-	// The template output is server-composed from the trusted conv_row partial
-	// (message bodies are never in the sidebar), so it is safe to mark as HTML for
-	// interpolation into the fragment.
-	return template.HTML(buf.String()), nil //nolint:gosec // server-rendered sidebar markup, no user HTML
+	return template.HTML(buf.String()), nil //nolint:gosec // server-rendered markup, no user HTML
 }
 
 // renderProgressError renders a failed progress fragment for a start-time error

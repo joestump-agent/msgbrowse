@@ -43,17 +43,17 @@ func TestEnableLandsConversationsInStore(t *testing.T) {
 	})
 
 	var mu sync.Mutex
-	exporter := onboard.ExecRunner(func(ctx context.Context, name string, env []string, args ...string) error {
+	exporter := onboard.ExecRunner(func(ctx context.Context, name string, env []string, args ...string) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		dest := args[len(args)-1] // <staging>/export
 		convDir := filepath.Join(dest, "Alice")
 		if err := os.MkdirAll(convDir, 0o755); err != nil {
-			return err
+			return "", err
 		}
 		chat := "[2022-01-01 10:00:00] Alice: Hello from the fixture\n" +
 			"[2022-01-01 10:01:00] Me: Hi back\n"
-		return os.WriteFile(filepath.Join(convDir, "chat.md"), []byte(chat), 0o644)
+		return "", os.WriteFile(filepath.Join(convDir, "chat.md"), []byte(chat), 0o644)
 	})
 
 	r, err := onboard.NewRunner(onboard.Config{
@@ -104,20 +104,29 @@ func TestEnableLandsConversationsInStore(t *testing.T) {
 }
 
 // TestExportArgs asserts the app-owned argv per source stays in lockstep with
-// internal/cli/export.go's proven command lines (copy-mode iMessage, Signal into
-// export/, WhatsApp JSON + media), assembled only from the tool + the dest.
+// the proven command lines: copy-mode iMessage, Signal into export/, and — the
+// issue #150 fix — WhatsApp's iOS-mode invocation against the detected live
+// container DB + media dir (`-i -d <DB> -m <media> -o <dest> -j …/result.json
+// --no-html`). The detected paths thread through as ExportSource.
 func TestExportArgs(t *testing.T) {
 	dest := "/data/archives/x.staging"
+	const waDB = "/Users/j/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite"
+	const waMedia = "/Users/j/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/Message/Media"
 	cases := []struct {
 		src  string
+		srcp onboard.ExportSource
 		want []string
 	}{
-		{source.Signal, []string{filepath.Join(dest, "export")}},
-		{source.IMessage, []string{"-f", "txt", "-c", "clone", "-o", dest}},
-		{source.WhatsApp, []string{"-o", dest, "-j", filepath.Join(dest, "result.json")}},
+		{source.Signal, onboard.ExportSource{}, []string{filepath.Join(dest, "export")}},
+		{source.IMessage, onboard.ExportSource{}, []string{"-f", "txt", "-c", "clone", "-o", dest}},
+		{
+			source.WhatsApp,
+			onboard.ExportSource{DBPath: waDB, MediaDir: waMedia},
+			[]string{"-i", "-d", waDB, "-m", waMedia, "-o", dest, "-j", filepath.Join(dest, "result.json"), "--no-html"},
+		},
 	}
 	for _, tc := range cases {
-		got, err := onboard.ExportArgs(tc.src, dest)
+		got, err := onboard.ExportArgs(tc.src, dest, tc.srcp)
 		if err != nil {
 			t.Fatalf("ExportArgs(%s): %v", tc.src, err)
 		}
@@ -130,7 +139,12 @@ func TestExportArgs(t *testing.T) {
 			}
 		}
 	}
-	if _, err := onboard.ExportArgs("bogus", dest); err == nil {
+	// A WhatsApp Enable with no detected container DB must error rather than
+	// invoke wtsexporter without `-d` (which exits 2).
+	if _, err := onboard.ExportArgs(source.WhatsApp, dest, onboard.ExportSource{}); err == nil {
+		t.Fatal("ExportArgs(whatsapp) with no detected DB should error")
+	}
+	if _, err := onboard.ExportArgs("bogus", dest, onboard.ExportSource{}); err == nil {
 		t.Fatal("ExportArgs(bogus) should error")
 	}
 }

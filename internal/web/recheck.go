@@ -53,7 +53,9 @@ func (s *Server) handleSetupRecheck(w http.ResponseWriter, r *http.Request) {
 	// Re-run detection + the OS-consent probe for just this source and render the
 	// resulting card fragment. The card is an <li> that hx-swap="outerHTML"
 	// replaces the existing card, so a grant that is now present flips the state
-	// (Needs-permission → Ready) and drops the guidance affordance.
-	card := s.setupCardFor(s.detector(), src, token)
+	// (Needs-permission → Ready) and drops the guidance affordance. Store-presence
+	// still wins (issue #149): a source that already imported reads Enabled here
+	// too.
+	card := s.setupCardFor(s.detector(), src, token, s.sourcesPresent(r.Context()))
 	s.renderFragment(w, "setup_card", card)
 }

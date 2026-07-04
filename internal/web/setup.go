@@ -17,6 +17,7 @@
 package web
 
 import (
+	"context"
 	"html/template"
 	"net/http"
 
@@ -76,6 +77,12 @@ type setupCard struct {
 	// Token is the fresh per-session token this render minted, carried on the
 	// card's Enable/Recheck POST controls (SPEC-0013 §Security).
 	Token string
+	// SwapOOB marks the card as an out-of-band swap target: when true the rendered
+	// <li> carries hx-swap-oob="true" so htmx replaces the live card in place. The
+	// Enable Done fragment sets it to flip the card to Enabled alongside the
+	// progress swap, so the contradictory "Needs permission + ✓ Enabled" can't
+	// linger (issue #149).
+	SwapOOB bool
 }
 
 // HasSettingsLink reports whether the card's guidance carries a System Settings
@@ -132,10 +139,10 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	var base baseData
 	if isPartialRequest(r) {
 		// Boosted swap: no sidebar listing, no store work (SPEC-0008 REQ-0008-006).
-		base = partialBase("Setup · msgbrowse", 0)
+		base = partialBase("Providers · msgbrowse", 0)
 	} else {
 		var err error
-		base, err = s.baseData(r.Context(), "Setup · msgbrowse", 0)
+		base, err = s.baseData(r.Context(), "Providers · msgbrowse", 0)
 		if err != nil {
 			s.serverError(w, err)
 			return
@@ -151,7 +158,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	cards := s.setupCards(token)
+	cards := s.setupCards(r.Context(), token)
 	anyActionable := false
 	anyEnabled := false
 	for _, c := range cards {
@@ -178,25 +185,33 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 // order.
 //
 // State precedence (SPEC-0013 REQ "Source detection" four states):
-//   - Enabled       — the source already has a configured/imported archive
-//     (config archive root set); it is live, so detection is moot.
+//   - Enabled       — the source has imported conversations in the store OR a
+//     configured archive root (issue #149: store-presence is the primary Enabled
+//     signal, so a source that just imported reads Enabled regardless of the live
+//     permission probe); it is live, so detection is moot.
 //   - Not-detected  — the well-known local store is absent.
 //   - Needs-permission — detected, but the OS consent probe reports Needed.
 //   - Ready         — detected and accessible.
-func (s *Server) setupCards(token string) []setupCard {
+func (s *Server) setupCards(ctx context.Context, token string) []setupCard {
 	det := s.detector()
+	present := s.sourcesPresent(ctx)
 	cards := make([]setupCard, 0, len(source.All))
 	for _, src := range source.All {
-		cards = append(cards, s.setupCardFor(det, src, token))
+		cards = append(cards, s.setupCardFor(det, src, token, present))
 	}
 	return cards
 }
 
 // setupCardFor builds a single source's card. Enabled short-circuits detection:
-// a configured archive means the source is already live in the app regardless of
-// what the current machine's filesystem probes report (the archive may have been
-// imported on another run/machine).
-func (s *Server) setupCardFor(det setup.Detector, src, token string) setupCard {
+// an imported/configured source is already live in the app regardless of what
+// the current machine's filesystem probes report (the archive may have been
+// imported on another run/machine, and — issue #149 — a fresh import proves
+// access was granted, so the stale "Needs permission" badge must not win).
+//
+// present is the set of sources with conversations in the store (store-presence);
+// it is the primary Enabled signal so a just-imported source reads Enabled even
+// while its live OS-permission probe would still report Needed.
+func (s *Server) setupCardFor(det setup.Detector, src, token string, present map[string]bool) setupCard {
 	card := setupCard{
 		Source:          src,
 		Label:           source.Label(src),
@@ -204,7 +219,7 @@ func (s *Server) setupCardFor(det setup.Detector, src, token string) setupCard {
 		Token:           token,
 	}
 
-	if s.sourceConfigured(src) {
+	if present[src] || s.sourceConfigured(src) {
 		card.State = setupStateEnabled
 		card.StateLabel = "Enabled"
 		card.Detail = "This source is enabled and its archive is imported."
@@ -269,6 +284,25 @@ func probeSource(det setup.Detector, src string) setup.PermissionProbe {
 	default:
 		return setup.PermissionProbe{Source: src, State: setup.PermissionNotApplicable}
 	}
+}
+
+// sourcesPresent returns the set of sources with imported conversations in the
+// store — the store-presence Enabled signal the Setup cards prefer over the live
+// permission probe (issue #149). A store error is logged and treated as "nothing
+// present" so the page still renders (falling back to the config-root / detection
+// signals) rather than 500ing; the worst case is a card that reads Ready/Needs-
+// permission until the next render, never a crash.
+func (s *Server) sourcesPresent(ctx context.Context) map[string]bool {
+	srcs, err := s.store.SourcesPresent(ctx)
+	if err != nil {
+		s.log.Warn("setup: could not read source presence from store", "error", err)
+		return nil
+	}
+	present := make(map[string]bool, len(srcs))
+	for _, src := range srcs {
+		present[src] = true
+	}
+	return present
 }
 
 // sourceConfigured reports whether a source already has a configured archive

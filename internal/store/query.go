@@ -199,6 +199,32 @@ func (s *Store) ArchiveStats(ctx context.Context) (ArchiveStats, error) {
 	return st, nil
 }
 
+// SourcesPresent returns the distinct sources that have at least one
+// conversation in the store. It is the STORE-PRESENCE Enabled signal the Setup
+// cards use (issue #149): a source with imported conversations reads as Enabled
+// regardless of what the live OS-permission probe reports, so a successful import
+// can never leave the card stuck at "Needs permission". The query is a single
+// indexed DISTINCT scan of the tiny conversations table.
+func (s *Store) SourcesPresent(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT source FROM conversations`)
+	if err != nil {
+		return nil, fmt.Errorf("sources present: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var src string
+		if err := rows.Scan(&src); err != nil {
+			return nil, fmt.Errorf("scan source: %w", err)
+		}
+		out = append(out, src)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sources present rows: %w", err)
+	}
+	return out, nil
+}
+
 // SetPinned sets a conversation's pinned flag to an explicit state
 // (REQ-0006-010). The sidebar's PINNED section lists conversations where
 // pinned=1; ordering within each section stays by most-recent activity (the

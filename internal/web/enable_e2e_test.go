@@ -98,10 +98,11 @@ func TestEnableHTTPEndToEnd(t *testing.T) {
 	t.Cleanup(ts.Close)
 	client := ts.Client()
 
-	// 1. Render /setup to obtain a live per-session token from the page.
-	setupResp, err := client.Get(ts.URL + "/setup")
+	// 1. Render /providers (the renamed Setup surface) to obtain a live
+	//    per-session token from the page.
+	setupResp, err := client.Get(ts.URL + "/providers")
 	if err != nil {
-		t.Fatalf("GET /setup: %v", err)
+		t.Fatalf("GET /providers: %v", err)
 	}
 	setupBody := readBody(t, setupResp)
 	token := extractToken(t, setupBody)
