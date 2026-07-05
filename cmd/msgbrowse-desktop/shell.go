@@ -17,10 +17,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	goruntime "runtime"
 
 	"github.com/joestump/msgbrowse/cmd/msgbrowse-desktop/internal/shellstate"
+	"github.com/pkg/browser"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -39,13 +41,15 @@ const settingsPath = "/settings"
 // dead-server watcher) close the app exactly once, at any point in the app
 // lifecycle.
 type shell struct {
-	lc      shellstate.Lifecycle
-	baseURL string // embedded server base URL, for deep links
+	lc shellstate.Lifecycle
+	// baseURL is the embedded server base URL, for deep links. Set by run()
+	// right after embedded.Start returns: the shell must exist BEFORE Start so
+	// openExternal can be wired into the server's /desktop/open-url seam
+	// (issue #179), and Start only serves after that wiring.
+	baseURL string
 }
 
-func newShell(baseURL string) *shell {
-	return &shell{baseURL: baseURL}
-}
+func newShell() *shell { return &shell{} }
 
 // startup captures the Wails runtime context and replays a latched
 // pre-startup quit: a SIGINT/SIGTERM (or embedded-server death) delivered
@@ -100,6 +104,36 @@ func (sh *shell) openPairing() {
 	}
 	sh.showWindow()
 	wailsruntime.WindowExecJS(ctx, fmt.Sprintf("window.location.assign(%q);", sh.baseURL+settingsPath))
+}
+
+// openExternal hands a server-validated external URL to the OS default
+// browser (issue #179): the webview registers no new-window handler — Wails
+// v2 installs none — so target="_blank" navigations are dropped; desktop.js
+// posts cross-origin link clicks to /desktop/open-url and the web layer calls
+// this.
+//
+// It calls pkg/browser directly instead of wailsruntime.BrowserOpenURL: the
+// Wails wrapper's ValidateAndSanitizeURL rejects legal URL bytes — ( ) ~ !
+// $ [ ] * ; | < > { } and backslash, several of which appear in ordinary
+// message links (Wikipedia articles carry parentheses) — and it returns
+// void, logging the rejection only inside the Wails logger, so those links
+// would silently no-op while this seam reported success (adversarial-review
+// fix on PR #184). pkg/browser is the exact library Wails wraps: it passes
+// the URL as a single argv element to the platform opener (open / xdg-open /
+// rundll32), no shell interpolation. It performs no validation of its own,
+// so the web layer's validExternalURL — absolute http/https only, bounded
+// length, no control bytes — remains the security gate and runs before
+// every call. The error is propagated so the handler's 500 + sanitized-log
+// path actually fires when the OS opener fails.
+//
+// The pre-startup guard stays: a click cannot legitimately arrive before
+// OnStartup (the webview has not loaded a page yet), so anything that early
+// is refused rather than opening a browser mid-launch.
+func (sh *shell) openExternal(url string) error {
+	if sh.lc.Context() == nil {
+		return errors.New("shell runtime not started")
+	}
+	return browser.OpenURL(url)
 }
 
 // copyText puts text on the native clipboard via the Wails runtime — the OS

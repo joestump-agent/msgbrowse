@@ -1,4 +1,5 @@
-// Desktop-shell drag region (SPEC-0010 "Native shell affordances", issue #165).
+// Desktop-shell bridges (SPEC-0010 "Native shell affordances"): the drag
+// region (issue #165) and the external-link opener (issue #179).
 //
 // With the macOS title bar hidden (mac.TitleBarHiddenInset in the shell), the
 // unified toolbar is the window's drag surface. Wails' own drag protocol reads
@@ -11,10 +12,20 @@
 // message over the webview's script-message bridge, self-hosted under the
 // app's strict CSP (script-src 'self'; no inline JS).
 //
+// External links (issue #179) have the same root cause: the webview has no
+// new-window handler, so a target="_blank" navigation to another origin is
+// silently dropped. The click interceptor below hands cross-origin http(s)
+// links to the server's POST /desktop/open-url bridge, which opens the OS
+// default browser; same-origin links are left alone. Note "left alone" is
+// not "working": a same-origin target="_blank" anchor (the media thumbs
+// resolve to this loopback origin) is still dropped by the webview for the
+// same no-new-window-handler reason — a pre-existing gap issue #179 scoped
+// out, since this bridge only covers cross-origin external links.
+//
 // It is included by page_start ONLY when the shell marks the render as
 // desktop-chrome (web.Server.SetDesktopChrome), and it additionally no-ops
-// unless the <body> carries that class and a webview bridge exists — a plain
-// browser tab can never trigger it.
+// unless the <body> carries that class — a plain browser tab can never
+// trigger either bridge.
 (function () {
   "use strict";
 
@@ -83,6 +94,52 @@
       armed = true;
       window.addEventListener("mousemove", onMove, true);
       window.addEventListener("mouseup", disarm, true);
+    });
+
+    // External-link opener (issue #179): a plain left-click (no modifier —
+    // modified clicks keep their browser meaning) on an anchor whose resolved
+    // href is http(s) on ANOTHER origin is handed to the server bridge, which
+    // validates the URL again and opens the OS default browser. A failed POST
+    // falls through silently: the click does nothing, exactly the pre-fix
+    // behavior, and the server logs the reason.
+    document.addEventListener("click", function (e) {
+      if (e.defaultPrevented || e.button !== 0) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+        return;
+      }
+      if (!(e.target instanceof Element)) {
+        return;
+      }
+      var a = e.target.closest("a[href]");
+      if (!(a instanceof HTMLAnchorElement)) {
+        return;
+      }
+      var url;
+      try {
+        url = new URL(a.href); // already resolved absolute by the DOM
+      } catch (err) {
+        return;
+      }
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        return;
+      }
+      if (url.origin === window.location.origin) {
+        // Same-origin: not ours to intercept. Plain same-origin links
+        // navigate normally, but target="_blank" ones (the media thumbs)
+        // are still dropped by the webview — no new-window handler — a
+        // pre-existing gap out of issue #179's cross-origin scope.
+        return;
+      }
+      e.preventDefault();
+      fetch("/desktop/open-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "url=" + encodeURIComponent(url.href),
+      }).catch(function () {
+        /* silent: link does nothing, as before the bridge existed */
+      });
     });
   };
 

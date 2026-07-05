@@ -82,10 +82,20 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	es, err := embedded.Start(ctx, cfg, slog.Default(), embedded.WithShellNotes(notes.Snapshot))
+	// The shell is constructed BEFORE the embedded server so its openExternal
+	// can be wired into the web layer's /desktop/open-url bridge (issue #179)
+	// — the server serves the instant Start returns, and late seam wiring
+	// would race. It learns the server URL immediately below; every reader of
+	// baseURL (the tray deep links) starts after that write.
+	sh := newShell()
+
+	es, err := embedded.Start(ctx, cfg, slog.Default(),
+		embedded.WithShellNotes(notes.Snapshot),
+		embedded.WithExternalOpener(sh.openExternal))
 	if err != nil {
 		return err
 	}
+	sh.baseURL = es.URL
 
 	// Resolve + integrity-check the bundled exporter toolchain (SPEC-0013 REQ
 	// "Bundled tool integrity and version check": versions recorded for the About
@@ -98,8 +108,6 @@ func run() error {
 	// Enable, so deferring it never strands the window. In the non-bundled
 	// dev/Linux build it is a quick no-op (Bundled=false, no error).
 	go logBundledToolchain(ctx, slog.Default())
-
-	sh := newShell(es.URL)
 
 	// Quit when the context is cancelled (signal) or when the embedded server
 	// exits on its own — an abnormally dead server must not leave a live

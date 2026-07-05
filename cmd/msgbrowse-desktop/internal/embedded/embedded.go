@@ -52,6 +52,18 @@ func WithShellNotes(fn func() []web.ShellNote) Option {
 	return func(s *web.Server) { s.SetShellNotes(fn) }
 }
 
+// WithExternalOpener wires the shell's open-in-default-browser action into
+// the web layer's desktop-only POST /desktop/open-url bridge (issue #179):
+// the webview registers no new-window handler, so external target="_blank"
+// links would otherwise do nothing. fn receives an already-validated absolute
+// http(s) URL and is called from request goroutines; it must be safe for
+// concurrent use. The option lives here rather than defaulting in Start
+// because opening a browser needs the Wails runtime context, which this pure
+// package never touches.
+func WithExternalOpener(fn func(url string) error) Option {
+	return func(s *web.Server) { s.SetExternalOpener(fn) }
+}
+
 // desktopChromeFor reports whether served pages should carry the
 // desktop-chrome presentation flag (issue #165) for the given GOOS: only
 // macOS hides the native title bar (mac.TitleBarHiddenInset in main.go) and
