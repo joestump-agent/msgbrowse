@@ -45,9 +45,9 @@
     </form>
 
     <div role="tablist" class="media-tabs mb-5">
-      <a role="tab" class="media-tab {{if eq .Filter.Tab "images"}}media-tab-active{{end}}" href="{{.Filter.GalleryQuery "images"}}">Images <span class="media-tab-badge">{{.Counts.Images}}</span></a>
-      <a role="tab" class="media-tab {{if eq .Filter.Tab "files"}}media-tab-active{{end}}" href="{{.Filter.GalleryQuery "files"}}">Files <span class="media-tab-badge">{{.Counts.Files}}</span></a>
-      <a role="tab" class="media-tab {{if eq .Filter.Tab "links"}}media-tab-active{{end}}" href="{{.Filter.GalleryQuery "links"}}">Links <span class="media-tab-badge">{{.Counts.Links}}</span></a>
+      <a role="tab" class="media-tab {{if eq .Filter.Tab "images"}}media-tab-active{{end}}" href="{{.Filter.GalleryQuery "images"}}">Images <span class="media-tab-badge">{{num .Counts.Images}}</span></a>
+      <a role="tab" class="media-tab {{if eq .Filter.Tab "files"}}media-tab-active{{end}}" href="{{.Filter.GalleryQuery "files"}}">Files <span class="media-tab-badge">{{num .Counts.Files}}</span></a>
+      <a role="tab" class="media-tab {{if eq .Filter.Tab "links"}}media-tab-active{{end}}" href="{{.Filter.GalleryQuery "links"}}">Links <span class="media-tab-badge">{{num .Counts.Links}}</span></a>
     </div>
 
     <section>
@@ -158,14 +158,14 @@
   <div class="link-group mb-5">
     <div class="link-group-head">
       <span class="link-group-domain">{{.Domain}}</span>
-      <span class="link-group-count">{{.Total}}</span>
+      <span class="link-group-count">{{num .Total}}</span>
     </div>
     <ul class="media-list">
       {{- range .Links}}
       <li class="media-list-card">
         <a class="media-link-url" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{.URL}}</a>
         <div class="media-card-meta">
-          {{- if gt .Count 1}}<span class="font-mono">×{{.Count}}</span> · {{end}}
+          {{- if gt .Count 1}}<span class="font-mono">×{{num .Count}}</span> · {{end}}
           <a href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
           · <span class="font-mono">{{.TS}}</span>
           · <span class="source-pill {{sourceSlug .Source}}">{{humanSource .Source}}</span>

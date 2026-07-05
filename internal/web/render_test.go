@@ -1,6 +1,7 @@
 package web
 
 import (
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -315,5 +316,60 @@ func TestAvatarColorStableAndInPalette(t *testing.T) {
 	}
 	if !inPalette {
 		t.Errorf("avatarColor returned %q, not in palette", a)
+	}
+}
+
+// TestCommaInt covers the grouping boundaries (issue #178): no separator below
+// 1000, the 3/4-digit edge, the int64 extremes (MinInt64 negation must not
+// overflow), and negatives keeping the sign outside the grouping.
+func TestCommaInt(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0"},
+		{999, "999"},
+		{1000, "1,000"},
+		{12345, "12,345"},
+		{299750, "299,750"},
+		{-1234, "-1,234"},
+		{-999, "-999"},
+		{math.MaxInt64, "9,223,372,036,854,775,807"},
+		{math.MinInt64, "-9,223,372,036,854,775,808"},
+	}
+	for _, tc := range cases {
+		if got := commaInt(tc.in); got != tc.want {
+			t.Errorf("commaInt(%d) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestNum checks the template-facing type switch: the integer kinds templates
+// pass format, uint64 survives past MaxInt64, and anything else errors so a
+// mistyped pipeline fails the render instead of printing raw.
+func TestNum(t *testing.T) {
+	cases := []struct {
+		in   any
+		want string
+	}{
+		{int(2378), "2,378"},
+		{int64(299750), "299,750"},
+		{uint64(math.MaxUint64), "18,446,744,073,709,551,615"},
+	}
+	for _, tc := range cases {
+		got, err := num(tc.in)
+		if err != nil {
+			t.Errorf("num(%v): unexpected error %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("num(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if _, err := num("2378"); err == nil {
+		t.Error("num(string) should error, got nil")
+	}
+	if _, err := num(3.14); err == nil {
+		t.Error("num(float64) should error, got nil")
 	}
 }

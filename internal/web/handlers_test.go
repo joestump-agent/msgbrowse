@@ -397,6 +397,44 @@ func TestStatusPage(t *testing.T) {
 	}
 }
 
+// TestStatusPageFormatsThousands is the end-to-end guard for issue #178:
+// record an ingest run whose metrics cross 999 and assert the Status page
+// HTML carries the comma-grouped strings — the full handler → template → num
+// pipeline, covering duration, scanned/total/added, skipped lines, and errors.
+func TestStatusPageFormatsThousands(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	if _, err := st.RecordIngestRun(context.Background(), store.IngestRun{
+		Source:               "signal",
+		StartedAt:            time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC),
+		FinishedAt:           time.Date(2026, 6, 28, 12, 1, 23, 0, time.UTC),
+		DurationMS:           83457,
+		ConversationsScanned: 1200,
+		ConversationsChanged: 1100,
+		MessagesTotal:        1234567,
+		MessagesAdded:        4321,
+		SkippedLines:         1024,
+		Errors:               2048,
+	}); err != nil {
+		t.Fatalf("record ingest run: %v", err)
+	}
+	rec := get(t, srv, "/status")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status page = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"83,457 ms",
+		"1,100 changed / 1,200 scanned",
+		"1,234,567 total (4,321 added)",
+		"1,024",
+		"2,048",
+	} {
+		if !contains(body, want) {
+			t.Errorf("status page missing comma-formatted %q", want)
+		}
+	}
+}
+
 // helpers
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }

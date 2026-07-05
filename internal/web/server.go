@@ -164,6 +164,7 @@ func NewServer(st Store, cfg *config.Config, log *slog.Logger) (*Server, error) 
 		"renderBody":       renderBody,
 		"mediaURL":         mediaURL,
 		"humanSize":        humanSize,
+		"num":              num,
 		"domainOf":         domainOf,
 		"highlightSnippet": highlightSnippet,
 		"humanName":        humanName,

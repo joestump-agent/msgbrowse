@@ -129,7 +129,7 @@
                  re-ingest worker would repopulate on the next completed sync).
                  The note names the importer and the way out (unpair). */}}
             {{- if .HasCounts}}
-            <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{.Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{.Messages}} message{{if ne .Messages 1}}s{{end}}</span>
+            <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{num .Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{num .Messages}} message{{if ne .Messages 1}}s{{end}}</span>
             {{- end}}
             <span class="setup-note">Synced from {{.SyncedFrom}}. Enable and Refresh run on that device; to make this machine the importer, unpair it in Settings first.</span>
           {{- else if .ConfirmDisable}}
@@ -158,7 +158,7 @@
                  HasCounts=false (store hiccup, or Enabled purely via config)
                  degrades to the plain Imported note. */}}
             {{- if .HasCounts}}
-            <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{.Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{.Messages}} message{{if ne .Messages 1}}s{{end}}</span>
+            <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{num .Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{num .Messages}} message{{if ne .Messages 1}}s{{end}}</span>
             {{- else}}
             <span class="setup-note setup-note-ok">{{template "icon-check" $}} Imported</span>
             {{- end}}

@@ -54,7 +54,7 @@
       </form>
     </div>
     <div class="conv-meta">
-      <span><span class="font-mono">{{.Active.MessageCount}}</span> messages</span>
+      <span><span class="font-mono">{{num .Active.MessageCount}}</span> messages</span>
       {{- if .Active.FirstTS}}<span class="conv-meta-sep">·</span><span class="font-mono">{{dateLabel .Active.FirstTS}} – {{dateLabel .Active.LastTS}}</span>{{end}}
       {{/* Media chips deep-link to the gallery filtered to THIS conversation on
            the matching tab (#177). URLs come from galleryConvURL — the same
@@ -63,11 +63,11 @@
            jump-to-context caveat does not apply); zero-count chips stay
            hidden. */}}
       {{- if gt .Active.ImageCount 0}}<a class="meta-chip" href="{{galleryConvURL "images" .Active.ID}}" title="View images from this conversation"
-         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-photo" .}}<span class="font-mono">{{.Active.ImageCount}}</span></a>{{end}}
+         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-photo" .}}<span class="font-mono">{{num .Active.ImageCount}}</span></a>{{end}}
       {{- if gt .Active.LinkCount 0}}<a class="meta-chip" href="{{galleryConvURL "links" .Active.ID}}" title="View links from this conversation"
-         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-link" .}}<span class="font-mono">{{.Active.LinkCount}}</span></a>{{end}}
+         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-link" .}}<span class="font-mono">{{num .Active.LinkCount}}</span></a>{{end}}
       {{- if gt .Active.FileCount 0}}<a class="meta-chip" href="{{galleryConvURL "files" .Active.ID}}" title="View attachments from this conversation"
-         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-paperclip" .}}<span class="font-mono">{{.Active.FileCount}}</span></a>{{end}}
+         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-paperclip" .}}<span class="font-mono">{{num .Active.FileCount}}</span></a>{{end}}
     </div>
   </header>
   {{- if .Active.Facts}}
@@ -76,7 +76,7 @@
       <input type="checkbox" checked>
       <div class="collapse-title font-medium flex items-center gap-2">
         {{template "icon-identity" .}} What the AI has learned
-        <span class="badge badge-sm badge-neutral">{{len .Active.Facts}}</span>
+        <span class="badge badge-sm badge-neutral">{{num (len .Active.Facts)}}</span>
       </div>
       <div class="collapse-content">
         <ul class="space-y-1.5">

@@ -21,11 +21,11 @@
       <div class="stat-strip">
         <div class="stat-cell">
           <div class="stat-cell-label">Conversations</div>
-          <div class="stat-cell-value">{{.ConversationCount}}</div>
+          <div class="stat-cell-value">{{num .ConversationCount}}</div>
         </div>
         <div class="stat-cell">
           <div class="stat-cell-label">Messages</div>
-          <div class="stat-cell-value">{{.TotalMessages}}</div>
+          <div class="stat-cell-value">{{num .TotalMessages}}</div>
         </div>
         <div class="stat-cell">
           <div class="stat-cell-label">Newest message</div>
@@ -39,11 +39,11 @@
       {{if .Run}}
       <div class="status-grid">
         <div><div class="status-metric-label">Finished</div><div class="status-metric-value">{{.Run.FinishedAt.Format "2006-01-02 15:04:05"}}</div></div>
-        <div><div class="status-metric-label">Duration</div><div class="status-metric-value">{{.Run.DurationMS}} ms</div></div>
-        <div><div class="status-metric-label">Conversations</div><div class="status-metric-value">{{.Run.ConversationsChanged}} changed / {{.Run.ConversationsScanned}} scanned</div></div>
-        <div><div class="status-metric-label">Messages</div><div class="status-metric-value">{{.Run.MessagesTotal}} total ({{.Run.MessagesAdded}} added)</div></div>
-        <div><div class="status-metric-label">Skipped lines</div><div class="status-metric-value">{{.Run.SkippedLines}}</div></div>
-        <div><div class="status-metric-label">Errors</div><div class="status-metric-value">{{.Run.Errors}}</div></div>
+        <div><div class="status-metric-label">Duration</div><div class="status-metric-value">{{num .Run.DurationMS}} ms</div></div>
+        <div><div class="status-metric-label">Conversations</div><div class="status-metric-value">{{num .Run.ConversationsChanged}} changed / {{num .Run.ConversationsScanned}} scanned</div></div>
+        <div><div class="status-metric-label">Messages</div><div class="status-metric-value">{{num .Run.MessagesTotal}} total ({{num .Run.MessagesAdded}} added)</div></div>
+        <div><div class="status-metric-label">Skipped lines</div><div class="status-metric-value">{{num .Run.SkippedLines}}</div></div>
+        <div><div class="status-metric-label">Errors</div><div class="status-metric-value">{{num .Run.Errors}}</div></div>
       </div>
       {{else}}
       <p class="results-empty">No ingest has been recorded yet.</p>
@@ -104,7 +104,7 @@
                 {{- if eq .Health "healthy"}}<span class="sync-badge sync-badge-ok">Healthy</span>
                 {{- else if eq .Health "syncing"}}<span class="sync-badge sync-badge-info">Syncing</span>
                 {{- else if eq .Health "paused"}}<span class="sync-badge sync-badge-warn">Paused</span>
-                {{- else if eq .Health "error"}}<span class="sync-badge sync-badge-err">Error{{if .Errors}} ({{.Errors}} items){{end}}</span>
+                {{- else if eq .Health "error"}}<span class="sync-badge sync-badge-err">Error{{if .Errors}} ({{num .Errors}} items){{end}}</span>
                 {{- else}}<span class="sync-badge">Unknown</span>{{end}}
               </td>
               <td class="whitespace-nowrap mono">{{if eq .Health "unknown"}}—{{else}}{{printf "%.0f" .Completion}}%{{end}}</td>
@@ -127,7 +127,7 @@
     {{if .HasSnapshotPipeline}}
     <div class="status-card">
       <div class="status-card-title">Encrypted DB snapshots</div>
-      <p class="status-note mb-4">Total footprint: <span class="font-mono">{{humanSize .SnapshotFootprint}}</span> across <span class="font-mono">{{len .Snapshots}}</span> snapshots.
+      <p class="status-note mb-4">Total footprint: <span class="font-mono">{{humanSize .SnapshotFootprint}}</span> across <span class="font-mono">{{num (len .Snapshots)}}</span> snapshots.
         These are SQLCipher-encrypted raw database backups for disaster recovery —
         msgbrowse lists them but never opens or decrypts them.</p>
       {{if .Snapshots}}

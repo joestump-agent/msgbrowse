@@ -131,14 +131,14 @@
       {{- if .Done}}
       <div class="log-meta-row">
         <span class="log-meta-label">Imported</span>
-        <span class="log-meta-value">{{.Summary.ConversationsChanged}} conversations · {{.Summary.MessagesAdded}} messages added</span>
+        <span class="log-meta-value">{{num .Summary.ConversationsChanged}} conversations · {{num .Summary.MessagesAdded}} messages added</span>
       </div>
       {{/* The post-import transcode summary (issue #160): rendered only when the
            step converted or failed anything, so a text-only source stays quiet. */}}
       {{- if or .Summary.MediaConverted .Summary.MediaSkipped .Summary.MediaFailed}}
       <div class="log-meta-row">
         <span class="log-meta-label">Media</span>
-        <span class="log-meta-value">{{.Summary.MediaConverted}} transcoded · {{.Summary.MediaSkipped}} cached · {{.Summary.MediaFailed}} failed</span>
+        <span class="log-meta-value">{{num .Summary.MediaConverted}} transcoded · {{num .Summary.MediaSkipped}} cached · {{num .Summary.MediaFailed}} failed</span>
       </div>
       {{- end}}
       {{- end}}

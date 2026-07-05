@@ -77,7 +77,7 @@
     {{- if .Hits}}
     {{/* Results meta. Elapsed time isn't measured server-side yet (the brief's
          "· 0.04s"); we show the count only. */}}
-    <div class="results-meta mb-3">{{.Count}} result{{if ne .Count 1}}s{{end}}{{if eq .Count 200}} · showing first 200{{end}}</div>
+    <div class="results-meta mb-3">{{num .Count}} result{{if ne .Count 1}}s{{end}}{{if eq .Count 200}} · showing first 200{{end}}</div>
     <ol class="flex flex-col gap-2">
       {{- range $i, $hit := .Hits}}
       <li>

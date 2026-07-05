@@ -127,7 +127,7 @@
       <div id="sidebar-pinned-section"{{if not .PinnedConversations}} class="hidden"{{end}}>{{template "sidebar_pinned_inner" .}}</div>
       <div class="sidebar-section-head flex items-baseline justify-between px-4 pt-2 pb-1">
         <span class="sidebar-section-label">Conversations</span>
-        <span id="sidebar-conversations-count" class="font-mono opacity-40 text-xs">{{len .UnpinnedConversations}}</span>
+        <span id="sidebar-conversations-count" class="font-mono opacity-40 text-xs">{{num (len .UnpinnedConversations)}}</span>
       </div>
       {{/* Scrolling conversation list (non-pinned). */}}
       <ul id="sidebar-conversations" class="flex flex-col gap-0.5 px-2 pb-3 overflow-y-auto flex-1">
@@ -149,7 +149,7 @@
 {{define "sidebar_pinned_inner"}}
         <div class="sidebar-section-head flex items-baseline justify-between px-4 pt-2 pb-1">
           <span class="sidebar-section-label">Pinned</span>
-          <span class="font-mono opacity-40 text-xs">{{len .PinnedConversations}}</span>
+          <span class="font-mono opacity-40 text-xs">{{num (len .PinnedConversations)}}</span>
         </div>
         <ul id="sidebar-pinned" class="flex flex-col gap-0.5 px-2 pb-1">
           {{- range .PinnedConversations}}
@@ -168,7 +168,7 @@
      partial the shell renders, so the swapped rows are identical. */}}
 {{define "sidebar_lists_oob"}}
 <div id="sidebar-pinned-section"{{if not .PinnedConversations}} class="hidden"{{end}} hx-swap-oob="true">{{template "sidebar_pinned_inner" .}}</div>
-<span id="sidebar-conversations-count" class="font-mono opacity-40 text-xs" hx-swap-oob="true">{{len .UnpinnedConversations}}</span>
+<span id="sidebar-conversations-count" class="font-mono opacity-40 text-xs" hx-swap-oob="true">{{num (len .UnpinnedConversations)}}</span>
 <ul id="sidebar-conversations" class="flex flex-col gap-0.5 px-2 pb-3 overflow-y-auto flex-1" hx-swap-oob="true">
   {{- range .UnpinnedConversations}}
   {{- template "conv_row" (convRowCtx . $.ActiveID)}}
@@ -204,7 +204,7 @@
             <span class="min-w-0 flex-1">
               <span class="flex items-baseline justify-between gap-2">
                 <span class="conv-name truncate">{{humanName .Conv.Name}}</span>
-                <span class="conv-count font-mono shrink-0">{{.Conv.MessageCount}}</span>
+                <span class="conv-count font-mono shrink-0">{{num .Conv.MessageCount}}</span>
               </span>
               <span class="conv-preview truncate">
                 {{- if .Conv.LastSender}}<span class="conv-preview-sender">{{humanName .Conv.LastSender}}:</span> {{end}}{{.Conv.LastPreview}}
@@ -276,7 +276,7 @@
       {{- end}}
       {{- if .Reactions}}
       <div class="msg-reactions">
-        {{- range .Reactions}}<span class="reaction-badge" title="{{reactionTitle .}}"><span class="reaction-emoji">{{.Emoji}}</span>{{if gt .Count 1}}<span class="reaction-count font-mono">{{.Count}}</span>{{end}}</span>{{end}}
+        {{- range .Reactions}}<span class="reaction-badge" title="{{reactionTitle .}}"><span class="reaction-emoji">{{.Emoji}}</span>{{if gt .Count 1}}<span class="reaction-count font-mono">{{num .Count}}</span>{{end}}</span>{{end}}
       </div>
       {{- end}}
     </div>

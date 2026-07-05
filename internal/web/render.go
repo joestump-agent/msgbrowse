@@ -169,6 +169,54 @@ func humanSize(n int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
+// commaInt renders an integer with comma thousands separators ("299750" →
+// "299,750") for display text. Pure ASCII digit grouping — no locale tables
+// (issue #178). Templates reach it via "num" below.
+func commaInt(n int64) string {
+	if n < 0 {
+		// Negate in uint64 space so MinInt64 doesn't overflow.
+		return "-" + commaUint(uint64(-(n+1))+1)
+	}
+	return commaUint(uint64(n))
+}
+
+// commaUint groups the decimal digits of u in threes from the right.
+func commaUint(u uint64) string {
+	s := strconv.FormatUint(u, 10)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + (len(s)-1)/3)
+	head := len(s) % 3
+	if head == 0 {
+		head = 3
+	}
+	b.WriteString(s[:head])
+	for i := head; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
+// num is the template entry point for count formatting: the integer kinds
+// templates actually pass (count struct fields and len are int; int64/uint64
+// cover wider totals). Anything else is a template authoring bug — return an
+// error so the render fails loudly instead of printing an unformatted value.
+// Display text only: ids, query params, and data- attributes must stay raw.
+func num(v any) (string, error) {
+	switch n := v.(type) {
+	case int:
+		return commaInt(int64(n)), nil
+	case int64:
+		return commaInt(n), nil
+	case uint64:
+		return commaUint(n), nil
+	}
+	return "", fmt.Errorf("num: unsupported type %T", v)
+}
+
 // domainOf is a thin wrapper so templates can group links by domain.
 func domainOf(rawurl string) string { return signal.Domain(rawurl) }
 
