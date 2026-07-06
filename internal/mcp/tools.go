@@ -161,11 +161,12 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	// Vector half (best-effort): embed the query and retrieve. If embeddings or
 	// the LLM are unavailable, fall back to keyword-only rather than failing —
 	// but log the reason so a silently-degraded hybrid search is diagnosable.
+	// The embed model is read per call (live settings, #191).
 	var sem []store.ScoredMessage
-	if s.llm != nil && s.embedModel != "" {
+	if embedModel := s.embedModel(); s.llm != nil && embedModel != "" {
 		if vec := s.embedQuery(ctx, in.Query); vec != nil {
 			var serr error
-			sem, serr = s.store.SemanticSearch(ctx, vec, s.embedModel, store.SemanticOptions{
+			sem, serr = s.store.SemanticSearch(ctx, vec, embedModel, store.SemanticOptions{
 				ConversationID: convID, Source: in.Source, Sender: in.Sender,
 				StartUnix: dayStart(in.Start), EndUnix: dayEnd(in.End), K: limit,
 			})
@@ -192,7 +193,11 @@ func (s *Server) semanticSearch(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if strings.TrimSpace(in.Query) == "" {
 		return nil, searchMessagesOut{}, fmt.Errorf("query is required")
 	}
-	if s.llm == nil || s.embedModel == "" {
+	// Read the embed model per call so a live Settings → LLM change (an
+	// endpoint appearing, or the embed model being cleared) applies to the
+	// very next tool call (#191).
+	embedModel := s.embedModel()
+	if s.llm == nil || embedModel == "" {
 		return nil, searchMessagesOut{}, fmt.Errorf("semantic search unavailable: no embedding model configured")
 	}
 	convID, err := s.resolveConversation(ctx, in.Conversation)
@@ -207,7 +212,7 @@ func (s *Server) semanticSearch(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if k <= 0 || k > 100 {
 		k = 20
 	}
-	scored, err := s.store.SemanticSearch(ctx, vec, s.embedModel, store.SemanticOptions{
+	scored, err := s.store.SemanticSearch(ctx, vec, embedModel, store.SemanticOptions{
 		ConversationID: convID, Source: in.Source, K: k,
 	})
 	if err != nil {

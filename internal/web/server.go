@@ -28,6 +28,7 @@ import (
 	"github.com/joestump/msgbrowse/internal/config"
 	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/imageconv"
+	"github.com/joestump/msgbrowse/internal/llm"
 	"github.com/joestump/msgbrowse/internal/setup"
 	"github.com/joestump/msgbrowse/internal/source"
 	"github.com/joestump/msgbrowse/internal/store"
@@ -137,6 +138,14 @@ type Server struct {
 	// Wired via SetExternalOpener by the shell only; nil (browser mode) leaves
 	// POST /desktop/open-url answering 404.
 	externalOpener func(url string) error
+	// llmConfig is the live LLM settings source behind the Settings → LLM tab
+	// (#191): serve and the desktop shell wire an llm.Applier over the shared
+	// llm.Holder via SetLLMConfig. nil renders the tab from llmBoot and makes
+	// the save POST report itself unavailable.
+	llmConfig LLMConfigurator
+	// llmBoot is the boot-time LLM config snapshot (file + defaults merged),
+	// the tab's display fallback when no configurator is wired.
+	llmBoot llm.Settings
 }
 
 // NewServer constructs a Server, parsing templates and wiring routes.
@@ -165,6 +174,11 @@ func NewServer(st Store, cfg *config.Config, log *slog.Logger) (*Server, error) 
 		log:               log,
 		deviceSyncEnabled: cfg.DeviceSync.Enabled,
 		setupTokens:       newSetupTokens(),
+		llmBoot: llm.Settings{
+			BaseURL:    cfg.LLM.BaseURL,
+			EmbedModel: cfg.LLM.EmbedModel,
+			ChatModel:  cfg.LLM.ChatModel,
+		},
 	}
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"renderBody":       renderBody,
@@ -294,6 +308,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /setup/disable", s.handleSetupDisable)
 	mux.HandleFunc("GET /setup/status/{source}", s.handleSetupStatus)
 	mux.HandleFunc("GET /settings", s.handleSettings)
+	// The Settings → LLM tab (#191): a safe GET render plus the privileged
+	// save POST, gated inside its handler by the same checkSetupPOST contract
+	// as every other privileged POST.
+	mux.HandleFunc("GET /settings/llm", s.handleSettingsLLM)
+	mux.HandleFunc("POST /settings/llm", s.handleSettingsLLMSave)
 	// Device pairing + unpairing (SPEC-0014 Authentication table): privileged
 	// POSTs behind the same checkSetupPOST gate as the Setup POSTs (#157/#158).
 	mux.HandleFunc("POST /settings/devices/pair", s.handleDevicePair)

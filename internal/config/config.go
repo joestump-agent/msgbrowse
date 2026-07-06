@@ -10,6 +10,8 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +78,13 @@ type Config struct {
 
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string `mapstructure:"log_level"`
+
+	// SourceFile is the path of the YAML config file this configuration was
+	// loaded from, or "" when no config file was found (defaults + env only).
+	// It is not a config key (mapstructure:"-"): Unmarshal records it from the
+	// Viper instance so the Settings → LLM save handler (#191) can write back
+	// to the exact file the process actually loaded.
+	SourceFile string `mapstructure:"-"`
 }
 
 // DeviceSyncConfig configures device pairing and archive sync (ADR-0021 /
@@ -226,6 +235,14 @@ func Load(cfgFile string) (*viper.Viper, error) {
 		v.SetConfigType("yaml")
 		v.AddConfigPath(".")
 		v.AddConfigPath("$HOME/.config/msgbrowse")
+		// The platform user-config location (macOS: ~/Library/Application
+		// Support/msgbrowse) — where the desktop app creates the config file
+		// when the Settings → LLM tab saves with no file present (#191). On
+		// Linux this usually duplicates $HOME/.config/msgbrowse; the duplicate
+		// search path is harmless.
+		if ucd, err := os.UserConfigDir(); err == nil {
+			v.AddConfigPath(filepath.Join(ucd, "msgbrowse"))
+		}
 		v.AddConfigPath("/etc/msgbrowse")
 	}
 
@@ -239,12 +256,15 @@ func Load(cfgFile string) (*viper.Viper, error) {
 	return v, nil
 }
 
-// Unmarshal materializes a Config from the given Viper instance.
+// Unmarshal materializes a Config from the given Viper instance. It records
+// the config file Viper actually read (if any) in SourceFile so save-back
+// surfaces target the loaded file, never a guessed one.
 func Unmarshal(v *viper.Viper) (*Config, error) {
 	var c Config
 	if err := v.Unmarshal(&c); err != nil {
 		return nil, fmt.Errorf("decoding config: %w", err)
 	}
+	c.SourceFile = v.ConfigFileUsed()
 	return &c, nil
 }
 

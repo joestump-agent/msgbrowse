@@ -1,16 +1,16 @@
 {{define "settings"}}{{template "page_start" .}}{{template "settings_content" .}}{{template "page_end" .}}{{end}}
 
 {{/* settings_subnav is the Settings shell's sub-navigation (issue #163):
-     Settings · Providers · Logs · Status & backups, rendered at the top of
-     each of the four sections' pages so they read as one surface instead of
-     link-card jumps to standalone destinations. Providers joined the shell in
-     #175 (it left the sidebar — a configuration surface, not a primary
-     destination). The dot is the active tab's token ("settings" / "providers"
-     / "logs" / "status"); the active tab carries aria-current so the state is
-     conveyed as more than color (SPEC-0013 §Accessibility spirit). Boosted
-     like every in-app nav (SPEC-0008 REQ-0008-006), so switching tabs swaps
-     only #main-content; the old routes stay the canonical URLs — nothing
-     redirects. */}}
+     Settings · Providers · Logs · Status & backups · LLM, rendered at the top
+     of each section's page so they read as one surface instead of link-card
+     jumps to standalone destinations. Providers joined the shell in #175 (it
+     left the sidebar — a configuration surface, not a primary destination);
+     LLM joined last in #191 (the AI endpoint tab). The dot is the active
+     tab's token ("settings" / "providers" / "logs" / "status" / "llm"); the
+     active tab carries aria-current so the state is conveyed as more than
+     color (SPEC-0013 §Accessibility spirit). Boosted like every in-app nav
+     (SPEC-0008 REQ-0008-006), so switching tabs swaps only #main-content; the
+     old routes stay the canonical URLs — nothing redirects. */}}
 {{define "settings_subnav"}}
     <nav class="settings-subnav" aria-label="Settings sections"
          hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">
@@ -18,6 +18,7 @@
       <a href="/providers" class="settings-tab{{if eq . "providers"}} settings-tab-active{{end}}"{{if eq . "providers"}} aria-current="page"{{end}}>Providers</a>
       <a href="/logs" class="settings-tab{{if eq . "logs"}} settings-tab-active{{end}}"{{if eq . "logs"}} aria-current="page"{{end}}>Logs</a>
       <a href="/status" class="settings-tab{{if eq . "status"}} settings-tab-active{{end}}"{{if eq . "status"}} aria-current="page"{{end}}>Status &amp; backups</a>
+      <a href="/settings/llm" class="settings-tab{{if eq . "llm"}} settings-tab-active{{end}}"{{if eq . "llm"}} aria-current="page"{{end}}>LLM</a>
     </nav>
 {{end}}
 

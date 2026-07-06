@@ -25,9 +25,13 @@ import (
 
 // Server wires the msgbrowse store and LLM client into an MCP tool surface.
 type Server struct {
-	store      *store.Store
-	llm        llm.Client
-	embedModel string
+	store *store.Store
+	llm   llm.Client
+	// embedModel returns the CURRENT embedding model per call (never nil after
+	// NewServer): a static value in CLI mode, the live llm.Holder getter in
+	// desktop mode, so a Settings → LLM save applies to the next semantic
+	// search with no restart (#191).
+	embedModel func() string
 	log        *slog.Logger
 	srv        *mcpsdk.Server
 }
@@ -37,8 +41,13 @@ type Options struct {
 	// EmbedModel is the embedding model used to embed queries for semantic
 	// search; it must match the model used by `msgbrowse embed`.
 	EmbedModel string
-	Version    string
-	Logger     *slog.Logger
+	// EmbedModelFunc, when non-nil, supplies the embedding model PER CALL and
+	// takes precedence over EmbedModel. The desktop shell passes the shared
+	// llm.(*Holder).EmbedModel getter so semantic search follows a live
+	// Settings → LLM swap (#191); it must be safe for concurrent use.
+	EmbedModelFunc func() string
+	Version        string
+	Logger         *slog.Logger
 }
 
 // NewServer builds the MCP server and registers every tool. llmClient may be nil
@@ -53,7 +62,12 @@ func NewServer(st *store.Store, llmClient llm.Client, opts Options) *Server {
 	if version == "" {
 		version = "dev"
 	}
-	s := &Server{store: st, llm: llmClient, embedModel: opts.EmbedModel, log: log}
+	embedModel := opts.EmbedModelFunc
+	if embedModel == nil {
+		static := opts.EmbedModel
+		embedModel = func() string { return static }
+	}
+	s := &Server{store: st, llm: llmClient, embedModel: embedModel, log: log}
 	s.srv = mcpsdk.NewServer(&mcpsdk.Implementation{Name: "msgbrowse", Version: version}, nil)
 	s.registerTools()
 	return s

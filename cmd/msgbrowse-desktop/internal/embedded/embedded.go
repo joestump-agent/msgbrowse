@@ -201,12 +201,17 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Op
 		return nil, err
 	}
 
-	// The MCP server shares the store and mirrors `msgbrowse mcp`'s LLM
-	// wiring (internal/cli.newLLMClient): with llm unconfigured, keyword
-	// tools work and semantic tools return errors — identical degradation.
-	mcpSrv := mcp.NewServer(st, newLLMClient(cfg), mcp.Options{
-		EmbedModel: cfg.LLM.EmbedModel,
-		Logger:     log,
+	// One live LLM provider for the whole app (issue #191): the MCP server
+	// and the Settings → LLM tab share this holder, so a save on the tab
+	// swaps the client and semantic search uses the new endpoint on its very
+	// next call — no restart. Wiring mirrors `msgbrowse mcp`'s
+	// (internal/cli): with llm unconfigured, keyword tools work and semantic
+	// tools return errors — identical degradation.
+	holder := newLLMHolder(cfg)
+	srv.SetLLMConfig(newLLMApplier(cfg, holder))
+	mcpSrv := mcp.NewServer(st, holder, mcp.Options{
+		EmbedModelFunc: holder.EmbedModel,
+		Logger:         log,
 	})
 
 	// One listener, two handlers: exact-path MCPPath goes to the MCP handler
@@ -273,6 +278,49 @@ func newLLMClient(cfg *config.Config) llm.Client {
 		ChatModel:  cfg.LLM.ChatModel,
 		EmbedModel: cfg.LLM.EmbedModel,
 		Timeout:    cfg.LLM.Timeout,
+	})
+}
+
+// newLLMHolder wraps the config-built client in the app's one swappable
+// holder (issue #191), mirroring internal/cli's helper of the same name: the
+// MCP server and the Settings → LLM tab both hold it, so a save applies live.
+func newLLMHolder(cfg *config.Config) *llm.Holder {
+	return llm.NewHolder(newLLMClient(cfg), llm.Settings{
+		BaseURL:    cfg.LLM.BaseURL,
+		EmbedModel: cfg.LLM.EmbedModel,
+		ChatModel:  cfg.LLM.ChatModel,
+	})
+}
+
+// llmConfigSavePath resolves where the Settings → LLM tab persists (#191):
+// the config file this process actually loaded (recorded by config.Unmarshal
+// in cfg.SourceFile), else the desktop-appropriate default —
+// <UserConfigDir>/msgbrowse/config.yaml, the same location the resolved data
+// dir anchors under. config.Load searches that directory too, so a config
+// file created here is found again on the next launch.
+func llmConfigSavePath(cfg *config.Config) (string, error) {
+	if cfg.SourceFile != "" {
+		return cfg.SourceFile, nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user config dir for config save: %w", err)
+	}
+	return filepath.Join(base, "msgbrowse", "config.yaml"), nil
+}
+
+// newLLMApplier builds the web layer's LLMConfigurator over holder, exactly
+// like internal/cli's helper: persist the three llm keys into the resolved
+// config file, then swap the live client. The API key stays the
+// boot-resolved value (MSGBROWSE_LLM_API_KEY / config file) — never editable
+// or displayed on the tab.
+func newLLMApplier(cfg *config.Config, holder *llm.Holder) *llm.Applier {
+	return llm.NewApplier(holder, cfg.LLM.APIKey, cfg.LLM.Timeout, func(s llm.Settings) error {
+		path, err := llmConfigSavePath(cfg)
+		if err != nil {
+			return err
+		}
+		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel)
 	})
 }
 

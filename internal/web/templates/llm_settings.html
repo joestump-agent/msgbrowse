@@ -1,0 +1,117 @@
+{{define "llmsettings"}}{{template "page_start" .}}{{template "llmsettings_content" .}}{{template "page_end" .}}{{end}}
+
+{{/* llmsettings_content is the boosted-swap unit (SPEC-0008 REQ-0008-006, the
+     *_content pattern): <title> keeps history entries titled; the define owns
+     <main id="main-content"> so partial responses carry no shell.
+
+     The Settings → LLM tab (issue #191): exactly three fields — Base URL,
+     Embed model, Facts model (llm.chat_model) — and deliberately NO API-key
+     field: keys come from the MSGBROWSE_LLM_API_KEY environment variable only
+     (internal/config posture), so a key never lands in a form, a page, or the
+     config file. The form is boosted (hx-boost on the form itself), so a save
+     swaps only #main-content; without JS it degrades to a plain same-origin
+     form POST through the identical handler. All feedback states are
+     fixed-enum banners; the echoed field values pass through html/template
+     escaping like everything else. */}}
+{{define "llmsettings_content"}}<title>{{.Title}}</title>
+    {{/* hx-history="false": the save form carries a live per-session setup
+         token (the privileged-POST gate), which must not be snapshotted into
+         htmx's localStorage history cache — the same opt-out the Settings
+         pairing page uses. */}}
+    <main id="main-content" class="flex-1" hx-history="false">
+  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
+    <h1 class="screen-h1">Settings</h1>
+    {{template "settings_subnav" "llm"}}
+    <p class="screen-sub">The OpenAI-compatible endpoint behind semantic search and AI features.
+      Saving applies immediately — no restart needed.</p>
+
+    {{- if eq .SaveResult "ok"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">LLM settings saved.</p>
+      <p class="link-card-sub">The change is live: semantic search and AI features now use this endpoint.</p>
+    </div>
+    {{- else if eq .SaveResult "unavailable"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Saving is not available here.</p>
+      <p class="link-card-sub">This server was started without a writable configuration source. Edit the
+        config file directly and restart.</p>
+    </div>
+    {{- else if eq .SaveResult "error"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Saving failed.</p>
+      <p class="link-card-sub">The settings could not be written to the config file; the running
+        configuration is unchanged. See Logs for details and try again.</p>
+    </div>
+    {{- else if .HasErrors}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Nothing was saved.</p>
+      <p class="link-card-sub">Fix the highlighted fields below and save again.</p>
+    </div>
+    {{- end}}
+
+    <section class="status-card space-y-4" aria-labelledby="settings-llm-heading">
+      <h2 id="settings-llm-heading" class="status-card-title">AI endpoint</h2>
+
+      <form method="post" action="/settings/llm" class="space-y-4"
+            hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML">
+        <input type="hidden" name="setup_token" value="{{.SetupToken}}">
+
+        <div class="space-y-1">
+          <label class="eyebrow block" for="llm-base-url">Base URL</label>
+          <input id="llm-base-url" name="base_url" type="text" class="filter-input w-full font-mono"
+                 value="{{.BaseURL}}" autocomplete="off" spellcheck="false"
+                 placeholder="http://127.0.0.1:4000/v1"
+                 {{if .ErrBaseURL}}aria-invalid="true" aria-describedby="llm-base-url-error"{{else}}aria-describedby="llm-base-url-hint"{{end}}>
+          {{- if .ErrBaseURL}}
+          <p id="llm-base-url-error" class="setup-note setup-note-warn">
+            {{- if eq .ErrBaseURL "required"}}A base URL is required.
+            {{- else if eq .ErrBaseURL "scheme"}}The base URL must start with http:// or https://.
+            {{- else if eq .ErrBaseURL "toolong"}}That base URL is too long.
+            {{- else}}That does not look like a valid URL.{{end}}</p>
+          {{- end}}
+          <p id="llm-base-url-hint" class="status-note">An OpenAI-compatible endpoint — a local LiteLLM or
+            Ollama proxy, or a hosted provider's API base.</p>
+        </div>
+
+        <div class="space-y-1">
+          <label class="eyebrow block" for="llm-embed-model">Embed model</label>
+          <input id="llm-embed-model" name="embed_model" type="text" class="filter-input w-full font-mono"
+                 value="{{.EmbedModel}}" autocomplete="off" spellcheck="false"
+                 placeholder="local-embed"
+                 {{if .ErrEmbedModel}}aria-invalid="true" aria-describedby="llm-embed-model-error"{{else}}aria-describedby="llm-embed-model-hint"{{end}}>
+          {{- if .ErrEmbedModel}}
+          <p id="llm-embed-model-error" class="setup-note setup-note-warn">
+            {{- if eq .ErrEmbedModel "toolong"}}That model name is too long.
+            {{- else}}That model name contains characters that are not allowed.{{end}}</p>
+          {{- end}}
+          <p id="llm-embed-model-hint" class="status-note">The embedding model behind semantic search.
+            Leave empty to turn semantic search off.</p>
+        </div>
+
+        <div class="space-y-1">
+          <label class="eyebrow block" for="llm-facts-model">Facts model</label>
+          <input id="llm-facts-model" name="facts_model" type="text" class="filter-input w-full font-mono"
+                 value="{{.FactsModel}}" autocomplete="off" spellcheck="false"
+                 placeholder="local-chat"
+                 {{if .ErrFactsModel}}aria-invalid="true" aria-describedby="llm-facts-model-error"{{else}}aria-describedby="llm-facts-model-hint"{{end}}>
+          {{- if .ErrFactsModel}}
+          <p id="llm-facts-model-error" class="setup-note setup-note-warn">
+            {{- if eq .ErrFactsModel "toolong"}}That model name is too long.
+            {{- else}}That model name contains characters that are not allowed.{{end}}</p>
+          {{- end}}
+          <p id="llm-facts-model-hint" class="status-note">The chat model used by the facts feature (and
+            the journal digest later); stored as <code class="font-mono">llm.chat_model</code>.</p>
+        </div>
+
+        <button type="submit" class="setup-btn">Save and apply</button>
+      </form>
+
+      <p class="status-note">There is no API-key field on purpose: an endpoint that requires a key reads
+        it from the <code class="font-mono">MSGBROWSE_LLM_API_KEY</code> environment variable — keys are
+        never stored in this app's config file.</p>
+      <p class="status-note">msgbrowse's only network egress goes to this URL; the default points at a
+        local proxy, and routing message content to a hosted provider is a deliberate choice (ADR-0010).</p>
+    </section>
+  </div>
+    </main>
+{{end}}

@@ -42,10 +42,14 @@ func newMCPCommand() *cobra.Command {
 
 			// stdio is the default transport; logs must go to stderr (slog already
 			// writes there) so they never corrupt the stdio JSON-RPC stream.
-			srv := mcp.NewServer(st, newLLMClient(cfg), mcp.Options{
-				EmbedModel: cfg.LLM.EmbedModel,
-				Version:    Version,
-				Logger:     slog.Default(),
+			// The client rides the shared swappable holder (#191) so this
+			// wiring is byte-for-byte the desktop shell's; standalone `mcp`
+			// simply never swaps it.
+			holder := newLLMHolder(cfg)
+			srv := mcp.NewServer(st, holder, mcp.Options{
+				EmbedModelFunc: holder.EmbedModel,
+				Version:        Version,
+				Logger:         slog.Default(),
 			})
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)

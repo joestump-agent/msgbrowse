@@ -76,6 +76,11 @@ func newServeCommand() *cobra.Command {
 			defer onboardRunner.Shutdown()
 			srv.SetEnabler(onboardRunner)
 
+			// The Settings → LLM tab (#191): saves persist the three llm
+			// keys into the loaded config file and swap the process's live
+			// LLM holder, so a changed endpoint applies without a restart.
+			srv.SetLLMConfig(newLLMApplier(cfg, newLLMHolder(cfg)))
+
 			// Device sync (ADR-0021): with device_sync.enabled the
 			// supervised Syncthing engine runs beside the web UI as a
 			// context-managed worker — plus the pairing manager behind

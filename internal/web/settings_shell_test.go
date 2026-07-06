@@ -7,10 +7,11 @@ import (
 	"testing"
 )
 
-// The issue-#163 acceptance, extended by #175 with the Providers tab:
-// Settings, Providers, Logs, and Status & backups render as one shell with
-// sub-navigation — each page carries the shared h1 + the boosted sub-nav with
-// its own tab active — while the old routes stay the canonical, working URLs.
+// The issue-#163 acceptance, extended by #175 with the Providers tab and by
+// #191 with the LLM tab: Settings, Providers, Logs, Status & backups, and LLM
+// render as one shell with sub-navigation — each page carries the shared h1 +
+// the boosted sub-nav with its own tab active — while the old routes stay the
+// canonical, working URLs.
 
 func TestSettingsShellSubNav(t *testing.T) {
 	srv, _, _ := newTestServer(t)
@@ -22,6 +23,7 @@ func TestSettingsShellSubNav(t *testing.T) {
 		{"/providers", `href="/providers" class="settings-tab settings-tab-active"`},
 		{"/logs", `href="/logs" class="settings-tab settings-tab-active"`},
 		{"/status", `href="/status" class="settings-tab settings-tab-active"`},
+		{"/settings/llm", `href="/settings/llm" class="settings-tab settings-tab-active"`},
 	}
 	for _, c := range cases {
 		t.Run(c.route, func(t *testing.T) {
@@ -43,15 +45,18 @@ func TestSettingsShellSubNav(t *testing.T) {
 			if !contains(body, `<h1 class="screen-h1">Settings</h1>`) {
 				t.Errorf("page missing the shared Settings shell h1")
 			}
-			// All four sections stay reachable from every tab.
-			for _, href := range []string{`href="/settings"`, `href="/providers"`, `href="/logs"`, `href="/status"`} {
+			// All five sections stay reachable from every tab.
+			for _, href := range []string{`href="/settings"`, `href="/providers"`, `href="/logs"`, `href="/status"`, `href="/settings/llm"`} {
 				if !contains(body, href) {
 					t.Errorf("sub-nav missing %s", href)
 				}
 			}
-			// Exactly the four tabs, providers second (#175).
-			if n := strings.Count(body, `class="settings-tab`); n != 4 {
-				t.Errorf("sub-nav has %d tabs, want 4", n)
+			// Exactly the five tabs, providers second (#175), LLM last (#191).
+			if n := strings.Count(body, `class="settings-tab`); n != 5 {
+				t.Errorf("sub-nav has %d tabs, want 5", n)
+			}
+			if llmAt, statusAt := strings.Index(body, `href="/settings/llm"`), strings.Index(body, `href="/status"`); llmAt < statusAt {
+				t.Error("LLM tab should be the LAST sub-nav tab (after Status & backups)")
 			}
 			// Exactly one h1 per page (accessibility: single h1).
 			if n := strings.Count(body, "<h1"); n != 1 {

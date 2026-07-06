@@ -42,6 +42,49 @@ func newLLMClient(cfg *config.Config) *llm.OpenAIClient {
 	})
 }
 
+// newLLMHolder wraps the config-built client in the process's swappable
+// holder (issue #191): every consumer reads the CURRENT client and model
+// names through it, so a Settings → LLM save applies live in `serve` and the
+// desktop shell, and `mcp` shares the identical wiring shape (it just never
+// swaps — a standalone process re-reads config at start).
+func newLLMHolder(cfg *config.Config) *llm.Holder {
+	return llm.NewHolder(newLLMClient(cfg), llm.Settings{
+		BaseURL:    cfg.LLM.BaseURL,
+		EmbedModel: cfg.LLM.EmbedModel,
+		ChatModel:  cfg.LLM.ChatModel,
+	})
+}
+
+// llmConfigSavePath resolves where the Settings → LLM tab persists (#191):
+// the config file this process actually loaded, else the standard per-user
+// location config.Load searches ($HOME/.config/msgbrowse/config.yaml) so the
+// created file is found on the next start. Never "." (cwd-dependent) and
+// never /etc (root-owned).
+func llmConfigSavePath(cfg *config.Config) (string, error) {
+	if cfg.SourceFile != "" {
+		return cfg.SourceFile, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for config save: %w", err)
+	}
+	return filepath.Join(home, ".config", "msgbrowse", "config.yaml"), nil
+}
+
+// newLLMApplier builds the web layer's LLMConfigurator over holder: persist
+// the three llm keys into the resolved config file, then swap the live
+// client. The API key stays the boot-resolved value (MSGBROWSE_LLM_API_KEY /
+// config, per the config posture) — it is not editable from the tab.
+func newLLMApplier(cfg *config.Config, holder *llm.Holder) *llm.Applier {
+	return llm.NewApplier(holder, cfg.LLM.APIKey, cfg.LLM.Timeout, func(s llm.Settings) error {
+		path, err := llmConfigSavePath(cfg)
+		if err != nil {
+			return err
+		}
+		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel)
+	})
+}
+
 // archiveRoots bundles the EFFECTIVE per-source archive roots for
 // archivepath.Resolve callers (media transcoding, doctor sampling): the
 // configured root when set, else the app-owned managed root
