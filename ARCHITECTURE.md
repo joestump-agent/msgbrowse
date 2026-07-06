@@ -1,33 +1,46 @@
 # Architecture
 
-msgbrowse is a single Go binary that imports on-disk message-archive exports into
-one SQLite database and serves three faces over it: an HTMX web UI, an MCP
-server, and a journal generator. It is local-first and read-only with respect to
+msgbrowse is a Go application that imports on-disk message-archive exports into
+one SQLite database and serves four faces over it: an HTMX web UI, an MCP
+server, a journal generator, and a native desktop shell
+(`cmd/msgbrowse-desktop` — a Wails window plus menubar tray over the exact same
+embedded web server, ADR-0017). It is local-first and read-only with respect to
 the archive.
 
 ## Layering
 
 ```
 cmd/msgbrowse            thin main(): delegates to internal/cli
+cmd/msgbrowse-desktop    Wails v2 desktop shell + systray, embedding the same web server (ADR-0017)
 └── internal/cli         Cobra commands + Viper config wiring
     ├── internal/config  config model (defaults < file < MSGBROWSE_* env < flags)
     ├── internal/signal  signal-export chat.md parser → []signal.Message (shared model)
     ├── internal/imessage imessage-exporter txt parser + flat-layout importer
-    ├── internal/source  canonical source names (signal, imessage)
+    ├── internal/whatsapp WhatsApp-Chat-Exporter result.json parser + importer (ADR-0016)
+    ├── internal/source  canonical source names (signal, imessage, whatsapp)
     ├── internal/ingest  scan signal archive, incremental idempotent import, snapshots
     ├── internal/store   SQLite: schema/migrations, relational + FTS5 + vectors
-    ├── internal/llm     OpenAI-compatible client (the only network egress)
+    ├── internal/llm     OpenAI-compatible client (the only internet egress)
     ├── internal/embed   batch embedding orchestration
     ├── internal/facts   incremental, cited contact-fact extraction (LLM)
     ├── internal/imageconv  transcode HEIC/TIFF → cached JPEG (external converter, ADR-0014)
     ├── internal/archivepath shared, traversal-safe attachment path resolution
+    ├── internal/setup   source detection + permission probes for guided setup
+    ├── internal/onboard(+svc) exporter execution: one-click Enable/Refresh runs (ADR-0020)
+    ├── internal/devices device identity: Syncthing device-ID parsing + pairing payloads
+    ├── internal/devsync device pairing flow + sync-completion → re-ingest worker
+    ├── internal/syncthing supervised Syncthing sync engine: config gen + REST (ADR-0021)
     ├── internal/mcp     Model Context Protocol server (tools over the store)
     └── internal/web     net/http + html/template + HTMX UI
 ```
 
 Dependencies point inward toward `store` and `signal`; `mcp` and `web` are sibling
 presentation layers that share the same `store` methods, so keyword/semantic/media
-behavior cannot drift between the model-facing and human-facing surfaces.
+behavior cannot drift between the model-facing and human-facing surfaces. The
+desktop shell embeds the identical server (same pages, same handlers), so browser
+mode and the `.app` cannot drift either; `internal/onboardsvc` and
+`internal/devsync` are pure-Go seams importable by both `msgbrowse serve` and the
+desktop's embedded server.
 
 ## Data model (SQLite, one file in `data_dir`)
 
@@ -35,6 +48,9 @@ behavior cannot drift between the model-facing and human-facing surfaces.
 - `messages(id, hash, conversation_id, source, ts, ts_unix, sender, body, is_system, seq)`
   — `hash` is the stable content key for idempotent re-import; `id` is the FTS/cursor rowid.
 - `attachments`, `links` — cascade-delete with their message.
+- `reactions(conversation_id, message_hash, source, emoji, actor)` — emoji
+  reaction badges, keyed to the message by stable hash
+  (`UNIQUE(message_hash, emoji, actor)`), cascade-delete with the conversation.
 - `contacts`, `contact_identifiers(contact_id, source, identifier)` — the unified
   identity layer; one canonical person spans Signal + iMessage handles
   (reconciled manually; see ADR-0003).
@@ -47,6 +63,10 @@ behavior cannot drift between the model-facing and human-facing surfaces.
   per-conversation incremental cursor (last message hash + model).
 - `snapshots`, `ingest_state`, `ingest_runs` — backup inventory + incremental
   bookkeeping + per-run summaries.
+- `paired_devices`, `sync_state` — device sync (ADR-0021): the explicitly
+  paired Syncthing peers (device-ID fingerprint, per-source importer/replica
+  roles) and per-folder re-ingest bookkeeping (folder↔source mapping + last
+  re-ingest time).
 - `messages_fts` — FTS5 external-content table kept in sync by triggers.
 
 Schema changes go through the versioned migration runner (`internal/store/migrations.go`),
@@ -77,8 +97,17 @@ inventory is refreshed by filename/size only.
 
 One `llm.Client` interface (`Embed`, `Chat`, `Transcribe`, `Vision`) backed by an
 OpenAI-compatible HTTP client, pointed by default at a local LiteLLM proxy. This
-package is the sole network egress. `Transcribe`/`Vision` exist for the
+package is the sole *internet* egress. `Transcribe`/`Vision` exist for the
 media-first journal (Slice 6).
+
+Two other network/process paths exist beyond it, both local: opt-in device
+sync (`device_sync.enabled`, off by default) has `internal/syncthing` supervise
+a Syncthing process whose msgbrowse-generated config is LAN-only — global
+discovery, relaying, and NAT traversal all disabled, local (LAN) announce on —
+connecting only to explicitly paired devices (ADR-0021); and
+`msgbrowse export` / the Providers Enable flow spawn the upstream exporter
+subprocesses, which do their own local I/O against the source message stores
+(ADR-0020).
 
 ## Web UI
 
@@ -107,6 +136,13 @@ the UI loads — CSS, htmx, the theme script, icons — is same-origin.
 - [ADR-0002](docs/adr/0002-vector-backend.md) — vector backend: brute-force default, sqlite-vec optional.
 - [ADR-0003](docs/adr/0003-dual-source-archive.md) — dual-source unified schema + manual contact reconciliation.
 - [ADR-0004](docs/adr/0004-mcp-sdk-and-rag.md) — official MCP SDK + citation-faithful hybrid RAG.
+- [ADR-0014](docs/adr/0014-image-transcoding-external-converter.md) — HEIC/TIFF transcoding via an external converter, cached JPEGs.
+- [ADR-0016](docs/adr/0016-whatsapp-source-exporter.md) — WhatsApp as a third source via WhatsApp-Chat-Exporter JSON.
+- [ADR-0017](docs/adr/0017-desktop-shell-wails.md) — desktop shell: Wails v2 window over the embedded web server.
+- [ADR-0020](docs/adr/0020-bundled-exporters-guided-setup.md) — bundled exporter toolchain in the `.app` + guided setup.
+- [ADR-0021](docs/adr/0021-syncthing-sync-engine.md) — device sync: supervised Syncthing engine (supersedes ADR-0018).
+
+The full set (ADR-0001–0021) lives in [`docs/adr/`](docs/adr/).
 
 ## Containerization
 

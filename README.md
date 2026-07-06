@@ -22,21 +22,23 @@ messages. Full documentation lives at
 
 > [!IMPORTANT]
 > **Nothing leaves your machine.** The web UI binds loopback only, archives are
-> treated strictly read-only, and the *single* outbound network call msgbrowse
-> ever makes is to the OpenAI-compatible LLM endpoint **you** configure
-> (default: a local LiteLLM → Ollama route). Encrypted `.snapshots/*.tar`
-> backups are inventoried but never opened. See [`SECURITY.md`](SECURITY.md)
-> for the full threat model.
+> treated strictly read-only, and the only *internet* egress msgbrowse ever
+> makes is to the OpenAI-compatible LLM endpoint **you** configure (default: a
+> local LiteLLM → Ollama route). Opt-in [device sync](#device-sync) adds
+> LAN-only Syncthing traffic to devices you pair — no global discovery, no
+> relays, nothing off your network. Encrypted `.snapshots/*.tar` backups are
+> inventoried but never opened. See [`SECURITY.md`](SECURITY.md) for the full
+> threat model.
 
 > [!NOTE]
 > **Status:** working today — all three sources (import/browse/transcript with
 > reaction badges), FTS + semantic search, media & links gallery, AI contact
-> facts, the MCP server, and a web UI that answers boosted navigations in
-> ~20 ms on a 400k-message archive. In development: the editorialized journal,
-> a Wails desktop app with menubar residency
-> ([#97](https://github.com/joestump/msgbrowse/issues/97)), QR device pairing +
-> archive sync ([#98](https://github.com/joestump/msgbrowse/issues/98)), and
-> Gitea-primary release publishing
+> facts, the MCP server, a web UI that answers boosted navigations in ~20 ms
+> on a 400k-message archive, the [desktop app](#desktop-app) with menubar
+> residency ([#97](https://github.com/joestump/msgbrowse/issues/97)), and
+> [QR device pairing + archive sync](#device-sync)
+> ([#98](https://github.com/joestump/msgbrowse/issues/98)). In development:
+> the editorialized journal and Gitea-primary release publishing
 > ([#99](https://github.com/joestump/msgbrowse/issues/99)).
 
 ## Contents
@@ -44,12 +46,13 @@ messages. Full documentation lives at
 - [Quickstart (`go install`)](#quickstart-go-install)
 - [Alternative: Docker](#alternative-docker)
 - [Desktop app](#desktop-app)
+- [Device sync](#device-sync)
 - [The data layout it reads](#the-data-layout-it-reads)
 - [Commands](#commands)
 - [Connecting Claude (MCP)](#connecting-claude-mcp)
 - [Configuration reference](#configuration-reference)
 - [Security](#security)
-- [Setting up the backup pipeline in Claude Cowork](#setting-up-the-backup-pipeline-in-claude-cowork)
+- [Scheduling daily exports with Claude Cowork](#scheduling-daily-exports-with-claude-cowork)
 - [Development](#development)
 
 ## Quickstart (`go install`)
@@ -77,6 +80,15 @@ Archive roots can also live in config/env (see
 [Configuration](#configuration-reference)). Imports share one database and are
 **incremental and idempotent** — re-run after each new export. `embed` computes
 vectors for semantic search; browsing and keyword search work without any LLM.
+
+> [!TIP]
+> Prefer clicking to typing? The web UI ships a guided setup surface:
+> **Settings → Providers** detects Signal, iMessage, and WhatsApp on the
+> machine and runs the export + import for each source with one click (Enable
+> once, Refresh any time); exporter run logs live under **Settings → Logs**.
+> The macOS [desktop app](#desktop-app) bundles the exporters, so that path
+> needs no installs at all. `msgbrowse sync` is the CLI equivalent — the whole
+> export → import → media → embed → facts pipeline in one command.
 
 > [!TIP]
 > Run `msgbrowse doctor` after every setup change. It validates the data dir,
@@ -169,7 +181,10 @@ native binary — so a fresh Mac with no Homebrew and no Python can export and
 import offline, with no manual tool installs. The app resolves those bundled
 paths directly and never consults `$PATH`
 ([ADR-0020](docs/adr/0020-bundled-exporters-guided-setup.md),
-[SPEC-0013](docs/openspec/specs/desktop-onboarding/spec.md)). The CLI
+[SPEC-0013](docs/openspec/specs/desktop-onboarding/spec.md)). The `.app` also
+bundles a pinned, integrity-checked [Syncthing](https://syncthing.net) binary
+as the [device sync](#device-sync) engine (browser/CLI mode resolves
+`syncthing` from `$PATH` or `device_sync.syncthing_bin` instead). The CLI
 (`msgbrowse export`) keeps its bring-your-own-exporter path — it still resolves
 `sigexport` / `imessage-exporter` / `wtsexporter` from `$PATH` or your
 `--*-bin` overrides — so advanced users lose nothing; only the `.app` bundles.
@@ -207,6 +222,37 @@ browser mode.
 [#119](https://github.com/joestump/msgbrowse/issues/119). Use browser mode in
 the meantime.
 
+## Device sync
+
+Opt-in, LAN-only archive sync between your machines
+([ADR-0021](docs/adr/0021-syncthing-sync-engine.md),
+[SPEC-0014](docs/openspec/specs/device-sync-syncthing/spec.md)): the Mac that
+runs the exporters (the **importer**) replicates its managed archives to
+paired **replica** devices — a home server, a laptop — and each replica
+imports the synced copy into its own local database automatically. msgbrowse
+supervises [Syncthing](https://syncthing.net) as the transfer engine: the
+desktop `.app` runs its bundled, pinned copy, while `msgbrowse serve` resolves
+`syncthing` from `$PATH` (or `device_sync.syncthing_bin`).
+
+1. Set `device_sync.enabled: true` on both devices (see the `device_sync:`
+   block in [`config.example.yaml`](config.example.yaml)) and restart the app
+   / `msgbrowse serve`.
+2. Open **Settings** on both devices and pair by scanning the QR code (or
+   pasting the Syncthing device ID). Pairing is mutual — both ends must
+   accept before any data moves.
+3. Watch it work: `msgbrowse devices status` shows engine, peer-connection,
+   and folder-completion state; `msgbrowse devices list` shows paired peers;
+   `msgbrowse doctor` includes sync checks. `msgbrowse devices unpair` stops
+   syncing to a device (already-synced local data stays).
+
+The posture is deliberately conservative: with `device_sync.enabled` false
+(the default) no sync process runs at all, and when enabled the generated
+Syncthing config is **LAN-only** — global discovery, relaying, and NAT
+traversal are all off; connections are mutual TLS pinned to the paired device
+IDs. The sync listener (default `:8788`) is the one socket beyond loopback,
+and sync traffic never crosses the internet. See
+[`SECURITY.md`](SECURITY.md) for the full trust model.
+
 ## The data layout it reads
 
 msgbrowse treats every archive as **strictly read-only**. The signal-export
@@ -236,6 +282,7 @@ covers all three end to end, including the macOS WhatsApp-app route
 | Command | What it does |
 | --- | --- |
 | `msgbrowse export` | Run the upstream exporters into the configured roots: `sigexport` (Signal), `imessage-exporter -f txt -c clone` (iMessage), and `wtsexporter` (WhatsApp). Tools must be on PATH or set via `--signal-export-bin` / `--imessage-exporter-bin` / `--whatsapp-exporter-bin`; `--skip-on-error` continues past a failing source; per-tool extra args plus trailing `-- …` passthrough. msgbrowse stores no secrets. |
+| `msgbrowse sync` | **One-command onboarding**: the whole pipeline — export → import → media → embed → facts — in order. `--no-export` / `--no-media` / `--no-embed` / `--no-facts` skip stages (import always runs — it is the incremental core); `--skip-on-error` continues past a failing stage; embed/facts warn-and-continue when no LLM is reachable. |
 | `msgbrowse import` | **All-in-one**: import every configured archive (Signal + iMessage + WhatsApp) into one DB. Unset sources are skipped. |
 | `msgbrowse signal-import` | Import/refresh a signal-export archive (incremental, idempotent). |
 | `msgbrowse imessage-import` | Import/refresh an imessage-exporter archive (`-f txt`, 4.2.0). |
@@ -246,6 +293,7 @@ covers all three end to end, including the macOS WhatsApp-app route
 | `msgbrowse media` | Transcode non-web images (HEIC/TIFF) to cached JPEGs for the gallery. Incremental; `import` runs it automatically. |
 | `msgbrowse serve` | Run the local HTMX web UI. `--port`/`--host` (or `--listen-addr`); `--open=false` for headless. Default `127.0.0.1:8787`. |
 | `msgbrowse mcp` | Run the MCP server (stdio by default; `--http` for streamable HTTP). |
+| `msgbrowse devices` | Manage [device-sync](#device-sync) peers: `list` paired devices, `unpair <device-id>` (stop syncing; local data stays), `status` (engine, peer connections, folder completion). |
 | `msgbrowse journal` | Rebuild the journal + LLM digests *(in development)*. |
 | `msgbrowse version` | Print version. |
 
@@ -306,11 +354,15 @@ flags. See [`config.example.yaml`](config.example.yaml) and the
 | `whatsapp_exporter_bin` | `MSGBROWSE_WHATSAPP_EXPORTER_BIN` | — | override the `wtsexporter` path (else PATH) |
 | `data_dir` | `MSGBROWSE_DATA_DIR` | `./data` | writable DB/embeddings dir |
 | `listen_addr` | `MSGBROWSE_LISTEN_ADDR` | `127.0.0.1:8787` | loopback by default |
-| `llm.base_url` | `MSGBROWSE_LLM_BASE_URL` | `http://127.0.0.1:4000/v1` | the only egress |
+| `llm.base_url` | `MSGBROWSE_LLM_BASE_URL` | `http://127.0.0.1:4000/v1` | the only internet egress |
 | `llm.api_key` | `MSGBROWSE_LLM_API_KEY` | — | env/secret only; never commit |
 | `llm.chat_model` | `MSGBROWSE_LLM_CHAT_MODEL` | `local-chat` | RAG + digests |
 | `llm.embed_model` | `MSGBROWSE_LLM_EMBED_MODEL` | `local-embed` | embeddings |
 | `vector_backend` | `MSGBROWSE_VECTOR_BACKEND` | `sqlite-vec` | brute-force today (ADR-0002) |
+| `device_sync.enabled` | `MSGBROWSE_DEVICE_SYNC_ENABLED` | `false` | opt-in LAN-only [device sync](#device-sync) (ADR-0021) |
+| `device_sync.listen_addr` | `MSGBROWSE_DEVICE_SYNC_LISTEN_ADDR` | `:8788` | Syncthing P2P listener — the one socket beyond loopback |
+| `device_sync.device_name` | `MSGBROWSE_DEVICE_SYNC_DEVICE_NAME` | hostname | this node's name as shown on paired peers |
+| `device_sync.syncthing_bin` | `MSGBROWSE_DEVICE_SYNC_SYNCTHING_BIN` | — | Syncthing path for `serve` (else PATH); the `.app` uses its bundled copy |
 | `journal.exclude_conversations` | — | `[]` | never sent to the LLM |
 | `log_level` | `MSGBROWSE_LOG_LEVEL` | `info` | debug/info/warn/error |
 
@@ -318,8 +370,10 @@ flags. See [`config.example.yaml`](config.example.yaml) and the
 
 Loopback-only by default, archives mounted read-only, container runs non-root
 with a read-only root filesystem and all capabilities dropped, the encrypted
-`.snapshots` are never opened, and the **only** outbound network call is to
-your configured `llm.base_url`.
+`.snapshots` are never opened, and the **only** outbound internet call is to
+your configured `llm.base_url`. Opt-in [device sync](#device-sync) adds
+LAN-only Syncthing connections to explicitly paired devices — mutual TLS,
+no global discovery, no relays.
 
 > [!CAUTION]
 > Pointing `llm.base_url` at a **hosted** model means message text (and, if you
@@ -327,10 +381,15 @@ your configured `llm.base_url`.
 > provider. Keep it local if that matters to you — that's the default. Read
 > [`SECURITY.md`](SECURITY.md) for the exact data-sent-to-the-LLM boundary.
 
-## Setting up the backup pipeline in Claude Cowork
+## Scheduling daily exports with Claude Cowork
 
-msgbrowse reads archives produced by upstream exporters. To create them on your
-Mac, paste the following prompts into Claude Cowork. (WhatsApp needs no
+You don't need Cowork to create an archive anymore — the **Settings →
+Providers** page (one-click Enable/Refresh, exporters bundled in the macOS
+app) and the `msgbrowse export` / `msgbrowse sync` commands run the exporters
+directly. What the prompts below add is **unattended freshness**: a scheduled
+daily launchd pipeline on your Mac with timestamped snapshot retention, so the
+archive keeps itself current without anyone clicking Refresh. If that appeals,
+paste them into Claude Cowork. (WhatsApp needs no
 scheduled job to start — the [export guide](https://joestump.github.io/msgbrowse/docs/getting-started/exporting-your-archives/)
 covers the one-command `wtsexporter` run against the Mac app's local database.)
 

@@ -236,7 +236,7 @@ still completes export, import, and media, and exits successfully.
 
 The archives grow as you re-export, and imports are incremental — so a daily
 scheduled export plus `msgbrowse sync` keeps everything fresh. The
-[README](https://github.com/joestump/msgbrowse#setting-up-the-backup-pipeline-in-claude-cowork)
+[README](https://github.com/joestump/msgbrowse#scheduling-daily-exports-with-claude-cowork)
 includes ready-to-paste Claude Cowork prompts that set up daily `launchd` jobs
 on macOS for both sources, including snapshot retention for Signal.
 

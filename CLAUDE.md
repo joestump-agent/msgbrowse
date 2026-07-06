@@ -1,8 +1,10 @@
 # msgbrowse
 
 Self-hosted, local-only browser, search engine, and AI-editorialized journal over
-your Signal and iMessage archives. Go + HTMX + SQLite; nothing leaves the machine
-except calls to one configurable OpenAI-compatible LLM endpoint.
+your Signal, iMessage, and WhatsApp archives. Go + HTMX + SQLite; nothing leaves
+the machine except calls to one configurable OpenAI-compatible LLM endpoint —
+plus, when opt-in device sync is enabled (ADR-0021), LAN-only Syncthing traffic
+to explicitly paired devices.
 
 See [README.md](README.md) for usage, [ARCHITECTURE.md](ARCHITECTURE.md) for the
 layering, and [SECURITY.md](SECURITY.md) for the threat model.
