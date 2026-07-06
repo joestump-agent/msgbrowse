@@ -283,6 +283,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /search", s.handleSearch)
 	mux.HandleFunc("GET /search/results", s.handleSearchResults)
 	mux.HandleFunc("GET /gallery", s.handleGallery)
+	// /media is the header Media tab's URL (#190): the same gallery render at a
+	// name matching the tab. /gallery stays the canonical surface — its tab and
+	// filter links keep their /gallery?... URLs — and the exact-path pattern
+	// never shadows the attachment route below ("GET /media/{id}/{path...}").
+	mux.HandleFunc("GET /media", s.handleGallery)
 	mux.HandleFunc("GET /gallery/items", s.handleGalleryItems)
 	mux.HandleFunc("GET /c/{id}", s.handleConversation)
 	mux.HandleFunc("POST /c/{id}/pin", s.handlePin)

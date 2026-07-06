@@ -52,7 +52,6 @@ func TestBuiltCSSReducedMotionGate(t *testing.T) {
 	for _, sel := range []string{
 		".toolbar-icon-btn",
 		".toolbar-title",
-		".sidebar-link",
 		".conv-row",
 		".pin-btn",
 		".attach-chip",

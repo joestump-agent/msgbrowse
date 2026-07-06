@@ -35,7 +35,8 @@ testable requirements and the slate tokens.
   titles 14 · H1 21–26 · home hero 38. Heading tracking `-.01em`…`-.025em`.
 - **Shape:** radius rows/cards 8–14, inputs 8–11, avatars 50% (or 6px dense),
   pills 5–8, frame 14–16. In-app elevation via borders, not shadows.
-- **Layout:** navbar 54px, sidebar 320px, transcript column max-width 640px
+- **Layout:** full-width unified header ~52px (amended by #190; originally a
+  54px navbar), sidebar 320px, transcript column max-width 640px
   (680px editorial). Centered screen columns: Home ~780px, Journal ~880px. Use
   flex/grid `gap`, not margins.
 
@@ -53,24 +54,45 @@ FOUC). Numerals in counts/timestamps/filenames MUST use a mono face and
 - **When** any page loads
 - **Then** the slate (or light) tokens apply before first paint and counts render in tabular mono.
 
-### REQ-0006-002: App shell — navbar
-The navbar MUST be 54px with the accent home glyph + **msgbrowse** wordmark on
-the left, a right-aligned global count in dim mono (`N conversations · M
-messages`), and a 34px circular settings button.
+### REQ-0006-002: App shell — header
 
-#### Scenario: Global counts in navbar
-- **Given** an ingested archive
-- **When** any screen renders
-- **Then** the navbar shows live conversation and message counts in tabular mono.
+*Amended by #190 (shell redesign). Originally: a 54px navbar with the accent
+home glyph + **msgbrowse** wordmark, right-aligned global counts in dim mono,
+and a 34px circular settings button. The global counts moved to Status
+(Settings → Diagnostics) in #152; #190 promoted the toolbar to a full-width
+header owning the primary navigation.*
+
+The app MUST render one full-width unified header (~52px) as a direct child of
+`<body>`, spanning the window above both the sidebar and the content column.
+It MUST show: LEFT — the below-md sidebar toggle and a contextual title
+(**msgbrowse** on home/global surfaces, the active conversation name on a
+transcript) that links home; CENTER — a Messages/Media segmented tab pair (the
+primary nav), kept in normal flow and centered within the header's available
+space so it can never overlap the side clusters at any viewport width; RIGHT —
+a search pill (an icon-only `/search` link below sm), the theme toggle, and a
+settings gear (the sole Settings entry). The header MUST NOT show global
+counts.
+
+#### Scenario: Header tabs and contextual title
+- **Given** an open conversation
+- **When** the page renders
+- **Then** the header shows the conversation name on the left (linking home), the centered Messages/Media tabs with Messages active, and the search/theme/settings cluster on the right — with no global counts.
 
 ### REQ-0006-003: App shell — sidebar
-The 320px sidebar MUST contain: a filter input ("Filter conversations"), nav
-links with leading icons (Search · Media · Journal · Status & backups), a PINNED
-section (when any conversation is pinned), and a CONVERSATIONS header with a
-right-aligned total. Conversation rows MUST be two lines (avatar+presence ·
-name · right-aligned mono count / last-message preview with `Me:` prefix when
-sent by the owner, truncated). The selected row MUST show the `#1b2330` tint and
-a left accent rail. Typing in the filter MUST narrow the list.
+
+*Amended by #190 (shell redesign). Originally the sidebar also carried nav
+links with leading icons (Search · Media · Journal · Status & backups); those
+surfaces moved to the header — the centered Messages/Media tabs and the search
+pill — leaving the sidebar list-only.*
+
+The 320px sidebar MUST be list-only: a filter input ("Filter conversations"),
+a PINNED section (when any conversation is pinned), and a CONVERSATIONS header
+with a right-aligned total — no nav links. Conversation rows MUST be two lines
+(avatar+presence · name · right-aligned mono count / last-message preview with
+`Me:` prefix when sent by the owner, truncated). The selected row MUST show the
+`#1b2330` tint and a left accent rail. Typing in the filter MUST narrow the
+list. Below md the sidebar MUST present as an overlay drawer toggled from the
+header; at md and above it MUST be pinned open.
 
 #### Scenario: Selected conversation row
 - **Given** a conversation is open

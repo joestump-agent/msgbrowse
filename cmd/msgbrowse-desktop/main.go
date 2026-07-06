@@ -160,6 +160,13 @@ func run() error {
 		Title:  "msgbrowse",
 		Width:  1280,
 		Height: 860,
+		// Floor the window above the web shell's md breakpoint (#190): below
+		// 768px CSS the sidebar becomes a burger-toggled overlay drawer, an
+		// affordance for phone-width BROWSERS that must never appear in the
+		// desktop app. 800 keeps a margin over md; 600 keeps the transcript
+		// usable.
+		MinWidth:  800,
+		MinHeight: 600,
 		// Slate window background (issue #166): the window itself paints the
 		// app's base-100 (#0f1216, SPEC-0006) behind the webview — paired
 		// with the slate trampoline splash (internal/bootstrap) and the

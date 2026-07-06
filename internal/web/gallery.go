@@ -91,6 +91,9 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The gallery is the Media surface: the header's Media tab reads active
+	// (#190) whether it renders at /gallery or the /media alias.
+	base.NavTab = navTabMedia
 	// The dropdown uses the cheap id+name listing on BOTH paths so partial and
 	// full renders show the identical (alphabetical) option order.
 	refs, err := s.store.ConversationRefs(ctx)

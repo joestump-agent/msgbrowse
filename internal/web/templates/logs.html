@@ -17,7 +17,7 @@
      attributes only, no inline scripts/styles). State is conveyed as a text badge
      + status line, never color alone. */}}
 {{define "logs_content"}}<title>{{.Title}}</title>
-    <main id="main-content" class="flex-1">
+    <main id="main-content" class="flex-1" tabindex="0">
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
     {{/* Logs renders inside the Settings shell (issue #163): shared h1 +
          sub-nav, with /logs staying the canonical URL. */}}

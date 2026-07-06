@@ -4,7 +4,7 @@
      keeps history entries titled; the define owns <main id="main-content"> so
      partial responses carry no shell. */}}
 {{define "search_content"}}<title>{{.Title}}</title>
-    <main id="main-content" class="flex-1">
+    <main id="main-content" class="flex-1" tabindex="0">
   {{/* Search (REQ-0006-008, brief §4): a large field with a leading glyph, a
        wrapping filter row (conversation / source / sender / from / to + Has-
        attachment / Has-link toggles + accent Search button), a results meta line

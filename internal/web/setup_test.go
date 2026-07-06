@@ -200,12 +200,13 @@ func TestSetupA11yLandmarksAndHeading(t *testing.T) {
 	if n := strings.Count(body, "<h1"); n != 1 {
 		t.Errorf("/setup has %d <h1> elements, want exactly 1", n)
 	}
-	// Landmarks: the shell's <main id="main-content"> and the sidebar <nav>.
+	// Landmarks: the shell's <main id="main-content"> and the header's
+	// primary-tab <nav> (#190: the sidebar carries no nav anymore).
 	if !contains(body, `<main id="main-content"`) {
 		t.Error("/setup missing <main> landmark")
 	}
-	if !contains(body, "<nav") {
-		t.Error("/setup missing <nav> landmark")
+	if !contains(body, `<nav class="header-tabs"`) {
+		t.Error("/setup missing the header tab <nav> landmark")
 	}
 	// The cards list is labelled and each card names its source + state.
 	if !contains(body, `aria-label="Message sources"`) {
@@ -220,33 +221,33 @@ func TestSetupA11yLandmarksAndHeading(t *testing.T) {
 	}
 }
 
-// TestSidebarNavOmitsSettingsSurfaces is the issue-#175 information-
-// architecture contract: the sidebar's primary nav carries only the content
-// surfaces (Search, Media). Settings' sole entry is the toolbar gear, and
-// Providers / Logs / Status & backups are tabs in the Settings sub-nav — none
-// of them may reappear as sidebar links.
-func TestSidebarNavOmitsSettingsSurfaces(t *testing.T) {
+// TestHeaderNavOmitsSettingsSurfaces is the information-architecture contract,
+// #175 as reshaped by #190: the primary nav is the header's Messages/Media tab
+// pair (the sidebar carries no nav at all — see TestSidebarListOnly). Settings'
+// sole entry is the header gear, and Providers / Logs / Status & backups are
+// tabs in the Settings sub-nav — none of them may appear in the primary nav.
+func TestHeaderNavOmitsSettingsSurfaces(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	body := get(t, srv, "/").Body.String()
-	navStart := strings.Index(body, "<nav")
+	navStart := strings.Index(body, `<nav class="header-tabs"`)
 	navEnd := strings.Index(body, "</nav>")
 	if navStart < 0 || navEnd < 0 {
-		t.Fatal("home missing the sidebar <nav>")
+		t.Fatal("home missing the header tab <nav>")
 	}
 	nav := body[navStart:navEnd]
-	for _, href := range []string{`href="/search"`, `href="/gallery"`} {
+	for _, href := range []string{`href="/"`, `href="/media"`} {
 		if !strings.Contains(nav, href) {
-			t.Errorf("sidebar nav missing %s", href)
+			t.Errorf("header nav missing %s", href)
 		}
 	}
-	for _, href := range []string{`href="/providers"`, `href="/settings"`, `href="/logs"`, `href="/status"`} {
+	for _, href := range []string{`href="/providers"`, `href="/settings"`, `href="/logs"`, `href="/status"`, `href="/search"`} {
 		if strings.Contains(nav, href) {
-			t.Errorf("sidebar nav must not carry %s — it lives under Settings (#175)", href)
+			t.Errorf("header nav must not carry %s — it lives under Settings or the search affordances (#175/#190)", href)
 		}
 	}
-	// The toolbar gear stays the one Settings entry.
+	// The header gear stays the one Settings entry.
 	if !contains(body, `href="/settings" class="toolbar-icon-btn" aria-label="Settings"`) {
-		t.Error("toolbar missing the settings gear (the sole Settings entry)")
+		t.Error("header missing the settings gear (the sole Settings entry)")
 	}
 }
 

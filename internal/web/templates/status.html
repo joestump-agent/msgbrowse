@@ -4,7 +4,7 @@
      keeps history entries titled; the define owns <main id="main-content"> so
      partial responses carry no shell. */}}
 {{define "status_content"}}<title>{{.Title}}</title>
-    <main id="main-content" class="flex-1">
+    <main id="main-content" class="flex-1" tabindex="0">
   {{/* Status & backups (REQ-0006-011): re-skinned to the slate system — slate
        surfaces/borders, mono tabular values — with no behavioral change. Keeps
        the archive-freshness stat strip, the ingest-run metric grid, and the

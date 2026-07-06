@@ -74,6 +74,11 @@ func TestToolbarSearchForm(t *testing.T) {
 		!contains(body, `placeholder="Search messages"`) {
 		t.Error("toolbar search input should be named q, labelled, and placeheld 'Search messages'")
 	}
+	// Below sm the pill is hidden and the sidebar Search link is gone (#190),
+	// so an icon-only boosted /search link keeps search reachable everywhere.
+	if !contains(body, `<a href="/search" class="toolbar-icon-btn toolbar-search-link sm:hidden" aria-label="Search"`) {
+		t.Error("header missing the below-sm icon-only /search link")
+	}
 }
 
 // TestToolbarIconButtonsLabelled verifies every icon-only toolbar control carries
@@ -130,11 +135,11 @@ func TestSidebarPresenceDotAndSource(t *testing.T) {
 	}
 }
 
-// TestSidebarFilterAboveConversationSections pins the #175 sidebar order: the
-// nav links come first, then the "Filter conversations" input directly above
-// the Pinned/Conversations section heads — all inside the collapsing <aside>,
-// where sidebar.js binds the input by id.
-func TestSidebarFilterAboveConversationSections(t *testing.T) {
+// TestSidebarListOnly pins the #190 sidebar reduction: the <aside> carries NO
+// nav links at all (the header tabs + search pill own Search/Media now) — just
+// the "Filter conversations" input directly above the Pinned/Conversations
+// section heads, where sidebar.js binds the input by id.
+func TestSidebarListOnly(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	body := get(t, srv, "/").Body.String()
 
@@ -145,14 +150,132 @@ func TestSidebarFilterAboveConversationSections(t *testing.T) {
 	}
 	aside := body[asideStart:asideEnd]
 
-	nav := strings.Index(aside, "<nav")
+	if strings.Contains(aside, "<nav") {
+		t.Error("sidebar must carry no <nav> — its Search/Media links moved to the header (#190)")
+	}
+	for _, href := range []string{`href="/search"`, `href="/gallery"`, `href="/media"`} {
+		if strings.Contains(aside, href) {
+			t.Errorf("sidebar must not carry %s — the header owns that surface (#190)", href)
+		}
+	}
 	filter := strings.Index(aside, `id="sidebar-filter"`)
 	sections := strings.Index(aside, "sidebar-section-head")
-	if nav < 0 || filter < 0 || sections < 0 {
-		t.Fatalf("sidebar missing nav/filter/section (nav %d, filter %d, sections %d)", nav, filter, sections)
+	if filter < 0 || sections < 0 {
+		t.Fatalf("sidebar missing filter/section (filter %d, sections %d)", filter, sections)
 	}
-	if !(nav < filter && filter < sections) {
-		t.Errorf("sidebar order should be nav → filter → sections (nav %d, filter %d, sections %d)", nav, filter, sections)
+	if !(filter < sections) {
+		t.Errorf("sidebar order should be filter → sections (filter %d, sections %d)", filter, sections)
+	}
+}
+
+// TestHeaderFullWidthShell pins the #190 shell skeleton: the header is a
+// direct child of <body>, rendered BEFORE (outside) the drawer that holds the
+// sidebar and content — full window width, traffic lights always over its
+// left edge in the desktop shell — and the conversation header inside the
+// content scroller pins at top-0 (the drifting 54px sticky offset, whose
+// see-through slit was the owner's item 1, is structurally gone — the token
+// is not spelled as the utility class here because Tailwind v4 scans Go
+// comments too and would resurrect it into the built app.css).
+func TestHeaderFullWidthShell(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+
+	body := get(t, srv, "/").Body.String()
+	header := strings.Index(body, "<header class=\"app-toolbar")
+	drawer := strings.Index(body, `class="app-shell drawer`)
+	aside := strings.Index(body, "<aside")
+	if header < 0 || drawer < 0 || aside < 0 {
+		t.Fatalf("home missing header/drawer/aside (header %d, drawer %d, aside %d)", header, drawer, aside)
+	}
+	if !(header < drawer && drawer < aside) {
+		t.Errorf("the header must precede the drawer (full-width, above the sidebar): header %d, drawer %d, aside %d", header, drawer, aside)
+	}
+
+	// #197 review: the header lays out as [left cluster | tabs | right
+	// cluster] IN FLOW (a 3-column grid in input.css) — the tab strip is a
+	// grid column, not an absolutely-positioned overlay, so it can never
+	// paint over the search pill/icon. Pin the flow order here.
+	left := strings.Index(body, `<div class="toolbar-cluster toolbar-cluster-left">`)
+	tabs := strings.Index(body, `<nav class="header-tabs"`)
+	right := strings.Index(body, `<div class="toolbar-cluster toolbar-cluster-right">`)
+	if left < 0 || tabs < 0 || right < 0 || !(left < tabs && tabs < right) {
+		t.Errorf("header should flow [left cluster | tabs | right cluster] (left %d, tabs %d, right %d)", left, tabs, right)
+	}
+
+	// #main-content is the app's scroll container (#190); it must be
+	// keyboard-focusable so PageDown/Space/arrows scroll without a pointer
+	// (#197 review; axe scrollable-region-focusable).
+	if !contains(body, `<main id="main-content" class="flex-1" tabindex="0"`) {
+		t.Error(`#main-content scroller should carry tabindex="0"`)
+	}
+
+	conv, err := st.GetConversation(context.Background(), "Harper")
+	if err != nil || conv == nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	convPage := get(t, srv, "/c/"+itoa(conv.ID)).Body.String()
+	if !contains(convPage, `class="conv-header sticky top-0 `) {
+		t.Error("conv-header should pin at top-0 inside the #main-content scroller")
+	}
+	// Spelled "top-["+"54px]" so Tailwind v4's content scanner (which scans
+	// .go files too) never sees the retired arbitrary-value token here — a
+	// plain literal would resurrect the utility in a rebuilt app.css and trip
+	// the CI drift guard against the committed artifact.
+	if retired := "top-[" + "54px]"; contains(convPage, retired) {
+		t.Errorf("conv-header still carries the retired %s offset", retired)
+	}
+}
+
+// TestHeaderTabs is the #190 primary-nav contract: the header centers a
+// Messages ("/") / Media ("/media") tab pair, boosted like all in-app nav,
+// with the server marking the active tab on full loads — Messages on home and
+// every /c/* transcript, Media on the gallery surface (/media aliases
+// /gallery), NEITHER on Search/Settings/… (shell.js re-syncs the same rule
+// after boosted swaps, which never re-render this shell).
+func TestHeaderTabs(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	conv, err := st.GetConversation(context.Background(), "Harper")
+	if err != nil || conv == nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+
+	const (
+		messagesActive = `href="/" data-nav-tab="messages" class="header-tab header-tab-active" aria-current="page"`
+		messagesIdle   = `href="/" data-nav-tab="messages" class="header-tab"`
+		mediaActive    = `href="/media" data-nav-tab="media" class="header-tab header-tab-active" aria-current="page"`
+		mediaIdle      = `href="/media" data-nav-tab="media" class="header-tab"`
+	)
+	cases := []struct {
+		route         string
+		wantMessages  string
+		wantMedia     string
+		activeSummary string
+	}{
+		{"/", messagesActive, mediaIdle, "Messages"},
+		{"/c/" + itoa(conv.ID), messagesActive, mediaIdle, "Messages"},
+		{"/gallery", messagesIdle, mediaActive, "Media"},
+		{"/media", messagesIdle, mediaActive, "Media"},
+		{"/search", messagesIdle, mediaIdle, "neither"},
+		{"/settings", messagesIdle, mediaIdle, "neither"},
+	}
+	for _, c := range cases {
+		t.Run(c.route, func(t *testing.T) {
+			body := get(t, srv, c.route).Body.String()
+			if !contains(body, `<nav class="header-tabs" aria-label="Primary"`) {
+				t.Fatal("page missing the centered header tab nav")
+			}
+			if !contains(body, c.wantMessages) || !contains(body, c.wantMedia) {
+				t.Errorf("%s should mark %s active (want %q and %q)", c.route, c.activeSummary, c.wantMessages, c.wantMedia)
+			}
+			// Both tabs are boosted via the nav's hx-boost inheritance.
+			navStart := strings.Index(body, `<nav class="header-tabs"`)
+			navEnd := strings.Index(body[navStart:], "</nav>")
+			if navStart < 0 || navEnd < 0 {
+				t.Fatal("cannot delimit the header tab nav")
+			}
+			if nav := body[navStart : navStart+navEnd]; !strings.Contains(nav, `hx-boost="true"`) {
+				t.Error("header tabs should be boosted (hx-boost on the nav)")
+			}
+		})
 	}
 }
 
@@ -210,10 +333,16 @@ func TestBuiltCSSCarriesShellComponents(t *testing.T) {
 	}
 	out := string(css)
 	for _, want := range []string{
-		".app-toolbar",               // unified toolbar (#152 Option A)
+		".app-toolbar",               // unified full-width header (#152 → #190)
 		".toolbar-title",             // contextual title
 		".toolbar-icon-btn",          // icon buttons (drawer/theme/settings)
 		".toolbar-search",            // toolbar search pill
+		".toolbar-cluster",           // in-flow header side clusters (#197 review)
+		".toolbar-cluster-left",      // truncating (minmax(0,1fr)) title-side cluster
+		".toolbar-cluster-right",     // min-content-guaranteed controls cluster
+		".header-tabs",               // centered Messages/Media tab strip (#190)
+		".header-tab",                // individual tab
+		".header-tab-active",         // active-tab lift
 		".sidebar-filter",            // filter input
 		".avatar-mono",               // monogram avatar
 		".presence-dot.src-signal",   // Signal presence dot
@@ -234,6 +363,14 @@ func TestBuiltCSSCarriesShellComponents(t *testing.T) {
 			t.Errorf("built app.css missing %q (rebuild: rm -rf .tools && make css)", want)
 		}
 	}
+	// The retired 54px sticky-offset arbitrary-value utility must stay dead:
+	// Tailwind v4 scans template AND Go comments, so a literal class token
+	// anywhere in the tree would re-emit the rule into the built artifact
+	// (#197 review, minor 4).
+	if strings.Contains(out, "top:54px") {
+		t.Error("built app.css resurrects the retired 54px sticky-offset utility (reword the comment token, then rm -rf .tools && make css)")
+	}
+
 	// The presence dot reads its color from the theme variables so both slate and
 	// slate-light variants restyle automatically.
 	if !strings.Contains(out, ".presence-dot.src-signal{background:var(--color-info)}") {
@@ -320,7 +457,7 @@ func TestThemeStillSelfHosted(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	rec := get(t, srv, "/")
 	body := rec.Body.String()
-	for _, src := range []string{"/static/theme.js", "/static/sidebar-toggle.js", "/static/sidebar.js", "/static/htmx.min.js"} {
+	for _, src := range []string{"/static/theme.js", "/static/sidebar-toggle.js", "/static/sidebar.js", "/static/shell.js", "/static/htmx.min.js"} {
 		if !contains(body, `src="`+src+`"`) {
 			t.Errorf("page missing self-hosted script %q", src)
 		}

@@ -176,8 +176,10 @@ func (s *Server) handleConversationAt(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Toolbar contextual title is the conversation name on a transcript (#152).
+	// Toolbar contextual title is the conversation name on a transcript (#152);
+	// jump-to-context is still a Messages surface (#190).
 	base.NavTitle = humanName(active.Name)
+	base.NavTab = navTabMessages
 	s.render(w, r, "conversation", conversationData{
 		baseData: base,
 		Active:   active,

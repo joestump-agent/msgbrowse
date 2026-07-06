@@ -5,18 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="/static/app.css">
-  {{/* theme.js and sidebar-toggle.js run before paint to apply the saved theme
-       and sidebar-collapsed state (no FOUC); all are self-hosted so they load
-       under script-src 'self'. sidebar.js powers the live "Filter
-       conversations" box; sidebar-toggle.js makes the toolbar burger
-       collapse/expand the sidebar at every width (#175); copy.js powers the
-       Settings page's copy buttons; setup.js powers the Setup
-       permission-guidance modals (focus trap, Escape, restore focus, recheck
-       aria-live) — all via document-level delegation (CSP-safe, no inline
-       handlers). */}}
+  {{/* theme.js runs before paint to apply the saved theme (no FOUC); all
+       scripts are self-hosted so they load under script-src 'self'.
+       sidebar.js powers the live "Filter conversations" box;
+       sidebar-toggle.js keeps the below-md drawer burger keyboard-operable
+       and its aria-expanded in sync (#175's lg+ collapse retired in #190);
+       shell.js keeps the header tabs' active state correct across boosted
+       swaps and forwards inner-container scrolls to htmx's `revealed`
+       checker (#190); copy.js powers the Settings page's copy buttons;
+       setup.js powers the Setup permission-guidance modals (focus trap,
+       Escape, restore focus, recheck aria-live) — all via document-level
+       delegation (CSP-safe, no inline handlers). */}}
   <script src="/static/theme.js"></script>
-  <script src="/static/sidebar-toggle.js"></script>
+  <script src="/static/sidebar-toggle.js" defer></script>
   <script src="/static/sidebar.js" defer></script>
+  <script src="/static/shell.js" defer></script>
   <script src="/static/copy.js" defer></script>
   <script src="/static/setup.js" defer></script>
   <script src="/static/htmx.min.js" defer></script>
@@ -29,66 +32,97 @@
 </head>
 {{/* desktop-chrome (SPEC-0010, #165): set only by the desktop shell's embedded
      server on macOS, where the native title bar is hidden and the traffic
-     lights overlay the toolbar — input.css pads .app-toolbar past them and
+     lights overlay the header — input.css pads .app-toolbar past them and
      marks it draggable. Boosted partial renders never re-render this shell, so
      the class persists across navigation. */}}
 <body class="bg-base-100 text-base-content{{if .DesktopChrome}} desktop-chrome{{end}}">
-<div class="drawer lg:drawer-open">
+{{/* Full-width unified header (#190, evolving #152 Option A's toolbar): ONE
+     ~52px frosted row spanning the entire window — including over the sidebar,
+     so the macOS traffic lights always overlay the header's left edge in the
+     desktop shell. It lives only in this page_start shell, never in a
+     *_content define (SPEC-0008 REQ-0008-006), so it never leaks into an
+     #main-content swap. LEFT: the below-md drawer burger (md:hidden — at md+
+     the sidebar is pinned and the #175 collapse feature is retired) + a
+     contextual title (.NavTitle — "msgbrowse" on home, the active conversation
+     name on a transcript) that links home (boosted, matching the app's
+     boosted-nav pattern). CENTER: the primary nav — Messages ("/") and Media
+     ("/media") as a segmented tab pair (the settings-subnav aesthetic),
+     boosted like all in-app nav; the server marks the active tab (.NavTab) on
+     full loads and shell.js re-syncs it from location across boosted swaps
+     (this shell is never re-rendered by them). RIGHT: the toolbar search pill
+     (a plain boosted GET form to /search — CSP-safe, needs no inline JS; the
+     pill is hidden below sm, where an icon-only /search link keeps search
+     reachable), the existing theme toggle, and a settings gear → /settings
+     (the sole Settings entry — #175). Icon-only controls carry aria-labels;
+     the search input is labelled; the header stays role=banner. Keyboard: the
+     burger is a <label>, which has no native focus/key activation, so it
+     carries role=button + tabindex=0 and sidebar-toggle.js maps Enter/Space to
+     a click and keeps aria-expanded in sync with the drawer checkbox — with
+     that, every header control is keyboard operable. */}}
+<header class="app-toolbar z-30 px-3 md:px-4">
+  <div class="toolbar-cluster toolbar-cluster-left">
+    <label for="nav-drawer" class="toolbar-icon-btn md:hidden" role="button" tabindex="0" aria-expanded="false" aria-label="Toggle sidebar">{{template "icon-menu" .}}</label>
+    <a href="/" class="toolbar-title" aria-label="msgbrowse home"
+       hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{if .NavTitle}}{{.NavTitle}}{{else}}msgbrowse{{end}}</a>
+  </div>
+  {{/* Centered tabs: the IN-FLOW middle column of the .app-toolbar grid
+       (input.css) — the grid's 1fr side tracks make overlap with the side
+       clusters structurally impossible, and the tabs center in the header's
+       AVAILABLE space (the #197 review live-reproduced the old absolutely-
+       positioned strip painting over the search pill/icon at narrow widths).
+       Active state: "/" and every /c/* transcript read as Messages; /media
+       and the /gallery surface it aliases read as Media; every other route
+       (Search, Settings, …) activates neither — decided in #190, enforced by
+       .NavTab here and by shell.js's location sync after boosted swaps. */}}
+  <nav class="header-tabs" aria-label="Primary"
+       hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">
+    <a href="/" data-nav-tab="messages" class="header-tab{{if eq .NavTab "messages"}} header-tab-active{{end}}"{{if eq .NavTab "messages"}} aria-current="page"{{end}}>Messages</a>
+    <a href="/media" data-nav-tab="media" class="header-tab{{if eq .NavTab "media"}} header-tab-active{{end}}"{{if eq .NavTab "media"}} aria-current="page"{{end}}>Media</a>
+  </nav>
+  <div class="toolbar-cluster toolbar-cluster-right">
+    {{/* Header search: a small boosted GET form to /search. Enter submits and
+         htmx swaps the /search page into #main-content (hx-boost on the form),
+         matching the app's boosted-nav contract; degrades to a plain GET
+         without JS. No inline JS (CSP-safe). */}}
+    <form action="/search" method="get" role="search"
+          class="toolbar-search hidden sm:flex"
+          hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">
+      <span class="toolbar-search-glyph" aria-hidden="true">{{template "icon-search" .}}</span>
+      <input type="search" name="q" class="toolbar-search-input" placeholder="Search messages" aria-label="Search messages" autocomplete="off">
+    </form>
+    {{/* Below sm the pill is hidden and the sidebar Search link is gone (#190),
+         so this icon-only link keeps /search reachable at every width. */}}
+    <a href="/search" class="toolbar-icon-btn toolbar-search-link sm:hidden" aria-label="Search"
+       hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-search" .}}</a>
+    <button type="button" data-theme-toggle class="toolbar-icon-btn" title="Toggle light/dark" aria-label="Toggle theme">{{template "icon-theme" .}}</button>
+    <a href="/settings" class="toolbar-icon-btn" aria-label="Settings"
+       hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-settings" .}}</a>
+  </div>
+</header>
+{{/* Below the header, the sidebar and content are independent scroll areas
+     (#190): the body never scrolls, so sticky offsets inside #main-content are
+     always top-0 — the 54px magic number (and its see-through drift gap) is
+     structurally gone. md:drawer-open pins the sidebar at md+ (~768px), so a
+     ~1000px desktop window never sees the burger; below md the same checkbox
+     drives the daisyUI overlay drawer. */}}
+<div class="app-shell drawer md:drawer-open">
   <input id="nav-drawer" type="checkbox" class="drawer-toggle">
-  <div class="drawer-content flex flex-col min-h-screen">
-    {{/* Unified toolbar (SPEC-0006 REQ-0006-002; #152 Option A, macOS
-         Preview/Finder "unified toolbar" aesthetic). GOVERNED navbar region
-         (SPEC-0006): one ~52px frosted row, skipped by boosted partial renders
-         (it lives only in this page_start shell, never in a *_content define —
-         SPEC-0008 REQ-0008-006), so it never leaks into an #main-content swap.
-         LEFT: the sidebar burger (the #nav-drawer label, at every width —
-         below lg it toggles the overlay drawer natively, at lg+
-         sidebar-toggle.js flips the persistent collapsed state, #175) + a
-         contextual title (.NavTitle — "msgbrowse" on home, the active
-         conversation name on a transcript) that links home (boosted, matching
-         the app's boosted-nav pattern). RIGHT: a real toolbar search pill (a
-         plain boosted GET form to /search — CSP-safe, needs no inline JS), the
-         existing theme toggle, and a settings gear → /settings (the sole
-         Settings entry — #175 dropped the sidebar link). Global counts
-         moved off the toolbar to keep it clean; they live on Status (under
-         Settings → Diagnostics). Icon-only controls carry aria-labels; the
-         search input is labelled; the header stays role=banner (the daisyUI
-         .navbar semantics). Keyboard: the burger is a <label>, which has no
-         native focus/key activation, so it carries role=button + tabindex=0
-         and sidebar-toggle.js maps Enter/Space to a click and keeps
-         aria-expanded in sync with the drawer/collapse state (#175) — with
-         that, every toolbar control is keyboard operable. */}}
-    <header class="app-toolbar sticky top-0 z-30 px-3 lg:px-4">
-      <label for="nav-drawer" class="toolbar-icon-btn" role="button" tabindex="0" aria-expanded="true" aria-label="Toggle sidebar">{{template "icon-menu" .}}</label>
-      <a href="/" class="toolbar-title" aria-label="msgbrowse home"
-         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{if .NavTitle}}{{.NavTitle}}{{else}}msgbrowse{{end}}</a>
-      <div class="flex-1"></div>
-      {{/* Toolbar search: a small boosted GET form to /search. Enter submits and
-           htmx swaps the /search page into #main-content (hx-boost on the form),
-           matching the app's boosted-nav contract; degrades to a plain GET
-           without JS. No inline JS (CSP-safe). */}}
-      <form action="/search" method="get" role="search"
-            class="toolbar-search hidden sm:flex"
-            hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">
-        <span class="toolbar-search-glyph" aria-hidden="true">{{template "icon-search" .}}</span>
-        <input type="search" name="q" class="toolbar-search-input" placeholder="Search messages" aria-label="Search messages" autocomplete="off">
-      </form>
-      <button type="button" data-theme-toggle class="toolbar-icon-btn" title="Toggle light/dark" aria-label="Toggle theme">{{template "icon-theme" .}}</button>
-      <a href="/settings" class="toolbar-icon-btn" aria-label="Settings"
-         hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-settings" .}}</a>
-    </header>
+  <div class="drawer-content">
 {{/* <main id="main-content"> is owned by each page's *_content define (not by
      this shell), so HTMX partial renders can emit just <title> + <main> without
-     the navbar/sidebar chrome (SPEC-0008 REQ-0008-006). */}}
+     the navbar/sidebar chrome (SPEC-0008 REQ-0008-006). input.css makes it the
+     content scroll container (#190). */}}
 {{end}}
 
 {{define "page_end"}}
   </div>
-  {{/* Sidebar (REQ-0006-003): 320px, surface base-300 (#161a20). */}}
+  {{/* Sidebar (REQ-0006-003): 320px, surface base-300 (#161a20). List only
+       (#190): the old Search/Media nav links are gone — both surfaces live in
+       the full-width header now (the centered tabs + the search pill/icon). */}}
   <div class="drawer-side z-40">
     <label for="nav-drawer" class="drawer-overlay" aria-label="Close menu"></label>
-    {{/* hx-boost turns the nav + conversation links below into HTMX GETs that
-         swap ONLY #main-content (hx-select) and push the URL, so the sidebar DOM
+    {{/* hx-boost turns the conversation links below into HTMX GETs that swap
+         ONLY #main-content (hx-select) and push the URL, so the sidebar DOM
          (and its scroll position + filter state) is preserved across navigation.
          The active-row highlight is re-synced client-side by sidebar.js on
          htmx:afterSettle. Media/download/external links live in the transcript,
@@ -96,21 +130,15 @@
          inside #main-content (gallery/search jump-to-context, gallery tabs) are
          also intentionally un-boosted: their #m{id} fragment scroll relies on a
          full-page load, and hx-select would drop the anchor jump. Degrades to
-         plain links without JS. */}}
-    <aside class="app-sidebar w-80 min-h-full bg-base-300 border-r border-neutral flex flex-col"
+         plain links without JS. h-full (not min-h-full): the sidebar fills the
+         below-header row and scrolls internally (#190) — the conversation list
+         is the flex-1 min-h-0 scroll area. */}}
+    <aside class="app-sidebar w-80 h-full bg-base-300 border-r border-neutral flex flex-col"
            hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">
-      {{/* Primary nav links. No Journal link yet (the route would 404). Settings
-           and Providers moved off the sidebar (#175): the toolbar gear is the
-           sole Settings entry, and Providers is a tab in the Settings sub-nav —
-           the sidebar stays a content surface (Search / Media / conversations). */}}
-      <nav class="px-2 pt-3 pb-1 flex flex-col gap-0.5">
-        <a href="/search" class="sidebar-link">{{template "icon-search" .}} <span>Search</span></a>
-        <a href="/gallery" class="sidebar-link">{{template "icon-photo" .}} <span>Media</span></a>
-      </nav>
       {{/* Filter input — live-narrows the conversation list via sidebar.js
-           (bound by id). Sits directly above the Pinned/Conversations section
-           heads (#175) so it reads as the lists' control, not the nav's. */}}
-      <div class="p-3 pt-1 pb-2">
+           (bound by id). First thing in the sidebar (#190): it reads as the
+           lists' control, and the lists are all the sidebar carries. */}}
+      <div class="p-3 pb-2">
         <label class="sidebar-filter flex items-center gap-2">
           <span class="opacity-50 inline-flex">{{template "icon-search" .}}</span>
           <input type="search" id="sidebar-filter" class="grow bg-transparent outline-none text-sm" placeholder="Filter conversations" autocomplete="off" aria-label="Filter conversations" aria-controls="sidebar-conversations">
@@ -129,8 +157,10 @@
         <span class="sidebar-section-label">Conversations</span>
         <span id="sidebar-conversations-count" class="font-mono opacity-40 text-xs">{{num (len .UnpinnedConversations)}}</span>
       </div>
-      {{/* Scrolling conversation list (non-pinned). */}}
-      <ul id="sidebar-conversations" class="flex flex-col gap-0.5 px-2 pb-3 overflow-y-auto flex-1">
+      {{/* Scrolling conversation list (non-pinned). min-h-0 lets the flex item
+           shrink below its content so overflow-y actually scrolls (#190) — keep
+           the class list identical to the sidebar_lists_oob copy below. */}}
+      <ul id="sidebar-conversations" class="flex flex-col gap-0.5 px-2 pb-3 overflow-y-auto flex-1 min-h-0">
         {{- range .UnpinnedConversations}}
         {{- template "conv_row" (convRowCtx . $.ActiveID)}}
         {{- end}}
@@ -169,7 +199,7 @@
 {{define "sidebar_lists_oob"}}
 <div id="sidebar-pinned-section"{{if not .PinnedConversations}} class="hidden"{{end}} hx-swap-oob="true">{{template "sidebar_pinned_inner" .}}</div>
 <span id="sidebar-conversations-count" class="font-mono opacity-40 text-xs" hx-swap-oob="true">{{num (len .UnpinnedConversations)}}</span>
-<ul id="sidebar-conversations" class="flex flex-col gap-0.5 px-2 pb-3 overflow-y-auto flex-1" hx-swap-oob="true">
+<ul id="sidebar-conversations" class="flex flex-col gap-0.5 px-2 pb-3 overflow-y-auto flex-1 min-h-0" hx-swap-oob="true">
   {{- range .UnpinnedConversations}}
   {{- template "conv_row" (convRowCtx . $.ActiveID)}}
   {{- end}}

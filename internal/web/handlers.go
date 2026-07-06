@@ -25,8 +25,15 @@ import (
 // their body (Home stat strip, Status) — Option A (#152) removed the counts from
 // the toolbar itself, so the toolbar no longer reads this field.
 type baseData struct {
-	Title         string
-	NavTitle      string
+	Title    string
+	NavTitle string
+	// NavTab marks the active header tab on full-page renders (#190):
+	// navTabMessages on home and every /c/* transcript, navTabMedia on the
+	// gallery/media surface, "" everywhere else (Search, Settings, …) so
+	// neither tab claims an unrelated page. Boosted swaps never re-render the
+	// shell; /static/shell.js re-syncs the same rule from location — keep the
+	// two in lockstep.
+	NavTab        string
 	Conversations []store.ConversationSummary
 	ActiveID      int64
 	TotalMessages int // global message count (Home/Status body, not the toolbar)
@@ -98,6 +105,13 @@ func (s *Server) baseData(ctx context.Context, title string, activeID int64) (ba
 // with the conversation's display name (#152). The wordmark links home from the
 // toolbar, so this doubles as the wordmark text.
 const defaultNavTitle = "msgbrowse"
+
+// Header-tab tokens for baseData.NavTab (#190). Values match the templates'
+// data-nav-tab attributes and shell.js's location-sync names.
+const (
+	navTabMessages = "messages"
+	navTabMedia    = "media"
+)
 
 // partialBase is the shell-free baseData for HTMX partial renders: title and
 // active id only, zero store work. The *_content defines never touch
@@ -229,6 +243,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	// Home is the Messages surface: the header's Messages tab reads active.
+	base.NavTab = navTabMessages
 	s.render(w, r, "index", indexData{
 		baseData:          base,
 		ConversationCount: convCount,
@@ -268,7 +284,9 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 	}
 	// The unified toolbar shows the active conversation's display name as its
 	// contextual title on a transcript page (#152), not the "msgbrowse" wordmark.
+	// A transcript is a Messages surface (#190): the Messages tab reads active.
 	base.NavTitle = humanName(active.Name)
+	base.NavTab = navTabMessages
 	sort := parseSort(r)
 	page, err := s.store.GetMessages(ctx, id, 0, 0, pageSize, sort == sortDesc)
 	if err != nil {

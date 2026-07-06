@@ -34,7 +34,7 @@
      traps focus, restores it to the trigger on close, and closes on Escape
      (setup.js), with an aria-live recheck-result region. */}}
 {{define "setup_content"}}<title>{{.Title}}</title>
-    <main id="main-content" class="flex-1">
+    <main id="main-content" class="flex-1" tabindex="0">
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
     {{/* Providers renders inside the Settings shell (#175): shared h1 +
          sub-nav (its own tab active), with /providers staying the canonical

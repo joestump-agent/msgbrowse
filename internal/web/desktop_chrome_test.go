@@ -51,8 +51,11 @@ func TestDesktopChromeOnEveryFullPage(t *testing.T) {
 
 // TestDesktopDragRegionInBuiltCSS guards the committed app.css against drift
 // (the css.yml check rebuilds it, this fails earlier and locally): the built
-// stylesheet must carry the toolbar drag region, the no-drag opt-outs for its
-// interactive children, and the traffic-light inset scoped to desktop-chrome.
+// stylesheet must carry the header drag region, the no-drag opt-outs for its
+// interactive children, and the unconditional traffic-light inset scoped to
+// desktop-chrome — the header spans the full window at every width (#190), so
+// it always owns the top-left corner and the old drawer-state-dependent
+// sidebar rules are gone.
 func TestDesktopDragRegionInBuiltCSS(t *testing.T) {
 	css, err := staticFS.ReadFile("static/app.css")
 	if err != nil {
@@ -62,38 +65,46 @@ func TestDesktopDragRegionInBuiltCSS(t *testing.T) {
 	for _, want := range []string{
 		"--wails-draggable:drag",
 		"--wails-draggable:no-drag",
-		".desktop-chrome .app-toolbar",
-		".desktop-chrome .app-sidebar",
+		".desktop-chrome .app-toolbar{padding-left:80px}",
 	} {
 		if !contains(s, want) {
 			t.Errorf("built app.css missing %q — run `rm -rf .tools && make css` after editing input.css", want)
 		}
 	}
+	// #190 retired the corner-ownership handoff: no rule may reference the
+	// sidebar under desktop-chrome anymore.
+	if contains(s, ".desktop-chrome .app-sidebar") {
+		t.Error("built app.css still carries .desktop-chrome .app-sidebar rules — the #190 full-width header owns the traffic-light corner unconditionally")
+	}
 }
 
-// TestSidebarToggleAllWidths is the issue-#175 burger contract: the toolbar
-// burger renders at every width (the old breakpoint-hidden gate is gone) as a
-// keyboard-operable control, the shell loads sidebar-toggle.js (the CSP-clean
-// lg+ collapse path, before paint like theme.js), and the built app.css
-// carries the lg+ collapsed override plus the desktop-chrome traffic-light
-// re-inset for the collapsed state.
-func TestSidebarToggleAllWidths(t *testing.T) {
+// TestDrawerToggleNarrowOnly is the #190 burger contract, replacing the #175
+// all-widths one: the header burger exists ONLY below md (the phone-width
+// overlay-drawer affordance) as a keyboard-operable control, the drawer pins
+// open at md+ (~1000px desktop windows must never see a burger), and the #175
+// lg+ persistent-collapse feature is fully retired from the built CSS.
+func TestDrawerToggleNarrowOnly(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	body := get(t, srv, "/").Body.String()
 
-	if !contains(body, `<label for="nav-drawer" class="toolbar-icon-btn" role="button" tabindex="0" aria-expanded="true" aria-label="Toggle sidebar">`) {
-		t.Error("toolbar burger should render at all widths as a keyboard-operable control (toolbar-icon-btn, no breakpoint gate)")
+	// md:hidden gates the burger to narrow viewports; the drawer starts closed
+	// there, so aria-expanded begins false (sidebar-toggle.js tracks it).
+	if !contains(body, `<label for="nav-drawer" class="toolbar-icon-btn md:hidden" role="button" tabindex="0" aria-expanded="false" aria-label="Toggle sidebar">`) {
+		t.Error("header burger should be a keyboard-operable, md:hidden drawer toggle")
 	}
-	// Spelled "lg:"+"hidden" so Tailwind v4's content scanner (which scans .go
-	// files too) never sees the class token in this file — a plain literal
-	// would resurrect the utility in a rebuilt app.css and trip the CI drift
-	// guard against the committed artifact.
-	gated := "lg:" + "hidden"
-	if contains(body, gated) {
-		t.Errorf("the burger must not be gated to narrow viewports (%s)", gated)
+	// The drawer pins open at md+, not lg+ (#190 moved the breakpoint so a
+	// ~1000px window keeps the sidebar with no burger). The retired lg token is
+	// spelled "lg:"+"drawer-open" so Tailwind v4's content scanner (which scans
+	// .go files too) never sees it here — a plain literal would resurrect the
+	// utility in a rebuilt app.css and trip the CI drift guard.
+	if !contains(body, `class="app-shell drawer md:drawer-open"`) {
+		t.Error("shell drawer should pin the sidebar open at md+ (md:drawer-open)")
 	}
-	if !contains(body, `<script src="/static/sidebar-toggle.js"></script>`) {
-		t.Error("shell missing sidebar-toggle.js (loaded without defer, like theme.js)")
+	if retired := "lg:" + "drawer-open"; contains(body, retired) {
+		t.Errorf("shell still uses the retired %s breakpoint", retired)
+	}
+	if !contains(body, `<script src="/static/sidebar-toggle.js" defer></script>`) {
+		t.Error("shell missing sidebar-toggle.js (the drawer toggle's keyboard/aria wiring)")
 	}
 
 	css, err := staticFS.ReadFile("static/app.css")
@@ -101,16 +112,13 @@ func TestSidebarToggleAllWidths(t *testing.T) {
 		t.Fatalf("read embedded app.css: %v", err)
 	}
 	s := string(css)
-	for _, want := range []string{
-		// The persistent collapse: sidebar-toggle.js flips this class on <html>.
-		"html.sidebar-collapsed .drawer-side{display:none}",
-		// Collapsed at lg+ in the desktop shell, the toolbar steps past the
-		// traffic lights again (#165).
-		"html.sidebar-collapsed .desktop-chrome .app-toolbar{padding-left:80px}",
-	} {
-		if !contains(s, want) {
-			t.Errorf("built app.css missing %q — run `rm -rf .tools && make css` after editing input.css", want)
-		}
+	// The #175 collapse CSS (html.sidebar-collapsed …) must be gone.
+	if contains(s, "sidebar-collapsed") {
+		t.Error("built app.css still carries the retired #175 sidebar-collapse rules — run `rm -rf .tools && make css` after editing input.css")
+	}
+	// The md drawer-open variant must have been generated for the new shell.
+	if !contains(s, "md\\:drawer-open") {
+		t.Error("built app.css missing the md:drawer-open drawer rules — run `rm -rf .tools && make css` after editing the templates")
 	}
 }
 

@@ -9,7 +9,7 @@
      every other page (SPEC-0006 UI regions), though media errors always render
      as full documents (attachment links are never htmx-boosted). */}}
 {{define "error_content"}}<title>{{.Title}}</title>
-    <main id="main-content" class="flex-1">
+    <main id="main-content" class="flex-1" tabindex="0">
   <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
     <h1 class="screen-h1">{{.Heading}}</h1>
     <div class="notice-card">
