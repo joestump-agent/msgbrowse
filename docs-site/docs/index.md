@@ -32,5 +32,9 @@ except calls to the one OpenAI-compatible LLM endpoint you configure.
   [configuration](reference/configuration.md), the
   [security model](reference/security-model.md), and
   [troubleshooting](reference/troubleshooting.md).
+- **Development** — [local development](development/local-development.md)
+  (toolchain, make targets, the no-Node CSS pipeline, desktop-shell builds)
+  and the [macOS signing & notarization](development/release-signing.md)
+  owner runbook.
 - **[Architecture](/architecture)** — the generated ADR and specification
   section (also reachable from the **ADRs** and **Specifications** tabs above).

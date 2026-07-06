@@ -477,6 +477,11 @@ installing anything or changing system state. Requirements:
 
 ## Development
 
+Full guides live on the docs site: the
+[local development guide](https://joestump.github.io/msgbrowse/docs/development/local-development/)
+(toolchain, CSS pipeline + drift guard, desktop builds, fixtures) and the
+[macOS signing & notarization runbook](https://joestump.github.io/msgbrowse/docs/development/release-signing/).
+
 ```sh
 make build      # build ./bin/msgbrowse (pure Go, no cgo, no build tag)
 make install    # go install into $GOBIN / $GOPATH/bin
