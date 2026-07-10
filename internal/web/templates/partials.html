@@ -335,7 +335,13 @@
     {{- range $ai, $att := .Attachments}}
       {{- if and (eq $att.Kind "image") (imgRenderable $.Source $.ConvName $att.RelPath)}}
   <div class="lightbox" id="lb-m{{$msgID}}-{{$ai}}">
-    <a class="toolbar-icon-btn lightbox-close absolute top-4 right-4" href="#" title="close">✕</a>
+    {{/* Close returns to the originating row (#m{msgID}), not a bare "#":
+         clearing the lightbox :target with "#" also scrolls the document to the
+         top, which on a long transcript bounces a deep-scrolled reader up to the
+         newest message. Anchoring at the row clears the :target AND restores the
+         viewport to the image's message — the row's content-visibility:auto is
+         forced visible by its :target/.target rules so the anchor resolves. */}}
+    <a class="toolbar-icon-btn lightbox-close absolute top-4 right-4" href="#m{{$msgID}}" title="close">✕</a>
     <img loading="lazy" src="{{mediaURL $.ActiveID $att.RelPath}}" alt="{{$att.OriginalName}}">
     <div class="text-sm lightbox-caption"><span class="font-mono">{{if $att.OriginalName}}{{$att.OriginalName}}{{else}}{{$att.RelPath}}{{end}}</span></div>
   </div>
