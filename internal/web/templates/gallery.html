@@ -41,6 +41,16 @@
       </label>
       <label class="filter-control"><span class="filter-label">From</span><input type="date" name="start" value="{{.Filter.Start}}" class="filter-input"></label>
       <label class="filter-control"><span class="filter-label">To</span><input type="date" name="end" value="{{.Filter.End}}" class="filter-input"></label>
+      {{/* Sort steers the Images/Files walk (Links stay domain-grouped); the
+           value round-trips through parseGalleryFilter and rides tab + load-more
+           URLs so infinite scroll keeps the order. */}}
+      <label class="filter-control">
+        <span class="filter-label">Sort</span>
+        <select name="sort" class="filter-input">
+          <option value="desc" {{if eq .Filter.Sort "desc"}}selected{{end}}>Newest first</option>
+          <option value="asc" {{if eq .Filter.Sort "asc"}}selected{{end}}>Oldest first</option>
+        </select>
+      </label>
       <button type="submit" class="btn-search">Apply</button>
     </form>
 

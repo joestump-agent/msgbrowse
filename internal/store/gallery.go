@@ -22,6 +22,11 @@ type GalleryFilter struct {
 	StartUnix      int64
 	EndUnix        int64
 	Limit          int
+	// SortAsc flips the attachment walk to oldest-first; the zero value keeps
+	// the newest-first default. Links stay domain-ordered regardless (their
+	// display order is grouped, not chronological), so this only steers
+	// ListAttachments (Images/Files).
+	SortAsc bool
 }
 
 // MediaItem is one attachment (image or file) with the provenance needed to
@@ -196,23 +201,37 @@ SELECT a.id, a.conversation_id, conversations.name, conversations.source, a.mess
  WHERE a.kind = ?` + andSQL(clauses)
 	args := append([]any{kind}, filterArgs...)
 	if cursorTSUnix != 0 || cursorID != 0 {
-		// (ts_unix, id) < (cursor) — spelled with a redundant ts_unix <= bound so
-		// the index seeks straight to the cursor instead of re-walking and
-		// discarding every newer entry on each page.
-		q += ` AND a.ts_unix <= ? AND (a.ts_unix < ? OR a.id < ?)`
+		// Keyset seek in the walk direction: newest-first pages continue strictly
+		// before the cursor, oldest-first strictly after it. Each is spelled with
+		// a redundant ts_unix bound so the pinned index seeks straight to the
+		// cursor instead of re-walking and discarding every already-shown entry.
+		if f.SortAsc {
+			q += ` AND a.ts_unix >= ? AND (a.ts_unix > ? OR a.id > ?)`
+		} else {
+			q += ` AND a.ts_unix <= ? AND (a.ts_unix < ? OR a.id < ?)`
+		}
 		args = append(args, cursorTSUnix, cursorTSUnix, cursorID)
 	}
-	q += `
+	// Same pinned index serves both directions — SQLite walks it forward for ASC
+	// and backward for DESC, emitting rows already in display order (no sort).
+	if f.SortAsc {
+		q += `
+ ORDER BY a.ts_unix ASC, a.id ASC
+ LIMIT ?`
+	} else {
+		q += `
  ORDER BY a.ts_unix DESC, a.id DESC
  LIMIT ?`
+	}
 	args = append(args, limit)
 	return q, args
 }
 
 // ListAttachments returns one page of attachments of the given kind ("image"
-// or "file"), newest first, matching the filter. A zero cursor starts from the
-// newest; passing the previous page's NextTSUnix/NextID continues strictly
-// after it. Page size is f.Limit (default 200, max 1000).
+// or "file") matching the filter, ordered newest-first by default or
+// oldest-first when f.SortAsc is set. A zero cursor starts from the leading
+// edge; passing the previous page's NextTSUnix/NextID continues strictly after
+// it in the chosen order. Page size is f.Limit (default 200, max 1000).
 func (s *Store) ListAttachments(ctx context.Context, kind string, f GalleryFilter, cursorTSUnix, cursorID int64) (*MediaPage, error) {
 	limit := galleryLimit(f, 200, 1000)
 	// Fetch limit+1 to detect whether more pages exist.

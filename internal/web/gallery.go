@@ -20,6 +20,10 @@ type galleryFilterForm struct {
 	Source         string
 	Start          string
 	End            string
+	// Sort is the attachment display order (sortDesc default / sortAsc), carried
+	// on tab links and load-more URLs so it survives tab switches and
+	// infinite-scroll pagination. Mirrors the transcript's ?sort= convention.
+	Sort string
 }
 
 // galleryFileView decorates a file attachment with its on-disk size and type,
@@ -260,13 +264,15 @@ func parseGalleryFilter(r *http.Request) (galleryFilterForm, store.GalleryFilter
 	}
 	start := r.URL.Query().Get("start")
 	end := r.URL.Query().Get("end")
+	sort := parseSort(r) // sortDesc (newest-first) default; sortAsc for oldest-first
 
-	form := galleryFilterForm{Tab: tab, ConversationID: convID, Source: src, Start: start, End: end}
+	form := galleryFilterForm{Tab: tab, ConversationID: convID, Source: src, Start: start, End: end, Sort: sort}
 	filter := store.GalleryFilter{
 		ConversationID: convID,
 		Source:         src,
 		StartUnix:      dayStartUnix(start),
 		EndUnix:        dayEndUnix(end),
+		SortAsc:        sort == sortAsc,
 	}
 	return form, filter
 }
@@ -287,6 +293,11 @@ func (f galleryFilterForm) filterValues(tab string) url.Values {
 	}
 	if f.End != "" {
 		v.Set("end", f.End)
+	}
+	// Only the non-default order needs to travel; absent ?sort= reads as
+	// newest-first in parseGalleryFilter, keeping default URLs clean.
+	if f.Sort == sortAsc {
+		v.Set("sort", sortAsc)
 	}
 	return v
 }

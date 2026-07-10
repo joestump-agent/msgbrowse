@@ -87,6 +87,77 @@ func TestGalleryTabPreservesFilter(t *testing.T) {
 	}
 }
 
+// TestGallerySort covers the Media sort control (issue #5): the filter bar
+// offers Newest/Oldest, ?sort=asc round-trips through parseGalleryFilter and
+// flips the rendered order, and the choice rides tab links + the load-more
+// sentinel so infinite scroll keeps the order. Default URLs omit ?sort=.
+func TestGallerySort(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+
+	// The default page carries the Sort control but no ?sort= in its tab links.
+	rec := get(t, srv, "/gallery")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !contains(body, `name="sort"`) || !contains(body, "Newest first") || !contains(body, "Oldest first") {
+		t.Errorf("filter bar missing the sort control")
+	}
+	if contains(body, "sort=asc") {
+		t.Errorf("default page leaked sort=asc into a URL: %s", body)
+	}
+
+	// parseSort/filter round-trip: sort=asc selects the Oldest option and rides
+	// tab links + the load-more sentinel.
+	rec = get(t, srv, "/gallery?tab=images&sort=asc")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("asc status = %d", rec.Code)
+	}
+	body = rec.Body.String()
+	if !contains(body, `<option value="asc" selected>`) {
+		t.Errorf("sort=asc did not select the Oldest option")
+	}
+	// Tab links preserve the sort.
+	if !contains(body, "sort=asc") {
+		t.Errorf("tab links dropped sort=asc")
+	}
+
+	// Store-backed order flip: seed two images and confirm the oldest-first page
+	// renders them ahead of the default newest-first page. The fixture's own
+	// images share a coarse ordering, so use a dedicated conversation.
+	ctx := context.Background()
+	id, err := st.UpsertConversation(ctx, source.Signal, "Sortie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, _ := time.Parse(signal.TimestampLayout, "2020-01-01 09:00:00")
+	newer, _ := time.Parse(signal.TimestampLayout, "2021-01-01 09:00:00")
+	imgAtt := func(name string) []signal.Attachment {
+		return []signal.Attachment{{Kind: signal.KindImage, RelPath: "media/" + name, OriginalName: name}}
+	}
+	_, err = st.ReplaceConversationMessages(ctx, id, source.Signal, []signal.Message{
+		{Conversation: "Sortie", Timestamp: older, TimestampRaw: "2020-01-01 09:00:00", Sender: "A", Body: "x", Attachments: imgAtt("old.jpg")},
+		{Conversation: "Sortie", Timestamp: newer, TimestampRaw: "2021-01-01 09:00:00", Sender: "A", Body: "x", Attachments: imgAtt("new.jpg")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationID: id}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(descPage.Items) != 2 || descPage.Items[0].OriginalName != "new.jpg" {
+		t.Fatalf("default order = %+v, want new.jpg first", descPage.Items)
+	}
+	ascPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationID: id, SortAsc: true}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ascPage.Items) != 2 || ascPage.Items[0].OriginalName != "old.jpg" {
+		t.Errorf("SortAsc order = %+v, want old.jpg first", ascPage.Items)
+	}
+}
+
 // TestGalleryLinkEscaping confirms a crafted link URL is attribute-escaped in
 // the rendered href/text (defense in depth — the parser excludes <>"' from
 // bare URLs, but the store accepts any string).
