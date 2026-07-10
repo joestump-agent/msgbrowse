@@ -272,6 +272,11 @@
     {{- /* Group consecutive same-sender rows: show the name only on the first row
            of a run, or whenever a new day was just opened. */}}
     {{- $showSender := or $newDay (ne .Sender $prevSender)}}
+    {{- /* Capture the message id here: the attachment loops below mint per-image
+           lightbox target ids as lb-m{msgID}-{idx}, and inside `range
+           .Attachments` the dot is the attachment, so the message id (used for
+           the row's own #m{ID} anchor) is otherwise out of reach. */}}
+    {{- $msgID := .ID}}
   <div class="msg-row{{if .IsOwner}} msg-row-me{{end}}{{if not $showSender}} msg-row-grouped{{end}}{{if and $.HighlightID (eq .ID $.HighlightID)}} target{{end}}" id="m{{.ID}}">
     <time class="msg-time font-mono" datetime="{{.TS}}" title="{{.TS}}">{{clockTime .TS}}</time>
     <span class="msg-rail {{if .IsOwner}}rail-me{{else}}{{avatarColor .Sender}}{{end}}" aria-hidden="true"></span>
@@ -282,10 +287,16 @@
       {{- if $body}}<div class="msg-text whitespace-pre-wrap break-words">{{$body}}</div>{{end}}
       {{- if .Attachments}}
       <div class="msg-attachments">
-        {{- range .Attachments}}
-          {{- if and (eq .Kind "image") (imgRenderable $.Source $.ConvName .RelPath)}}
-          <a class="msg-thumb" href="{{mediaURL $.ActiveID .RelPath}}" target="_blank" rel="noopener noreferrer nofollow">
-            <img class="thumb" loading="lazy" src="{{mediaURL $.ActiveID .RelPath}}" alt="{{.OriginalName}}">
+        {{- range $ai, $att := .Attachments}}
+          {{- if and (eq $att.Kind "image") (imgRenderable $.Source $.ConvName $att.RelPath)}}
+          {{/* Renderable image: the thumbnail opens the same pure-CSS :target
+               lightbox the Media tab uses (gallery.html gallery_images_page),
+               keyed to the overlay emitted just after this row (issue #3). The
+               id is unique per page: message ids are unique and $ai disambiguates
+               multiple images in one message. No target=_blank/raw-file nav, no
+               JS — CSP-safe under script-src 'self'. */}}
+          <a class="msg-thumb" href="#lb-m{{$msgID}}-{{$ai}}">
+            <img class="thumb" loading="lazy" src="{{mediaURL $.ActiveID $att.RelPath}}" alt="{{$att.OriginalName}}">
           </a>
           {{- else}}
           {{/* Files, and images with no browser-renderable rendition (e.g. an
@@ -294,7 +305,7 @@
                (issue #161) makes the click a file save in every client — the
                desktop webview must never navigate away to a raw response
                (belt to the media handler's Content-Disposition braces). */}}
-          <a class="attach-chip" href="{{mediaURL $.ActiveID .RelPath}}" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">{{if eq .Kind "image"}}{{template "icon-photo" $}}{{else}}{{template "icon-paperclip" $}}{{end}}<span class="font-mono">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span></a>
+          <a class="attach-chip" href="{{mediaURL $.ActiveID $att.RelPath}}" download="{{if $att.OriginalName}}{{$att.OriginalName}}{{end}}">{{if eq $att.Kind "image"}}{{template "icon-photo" $}}{{else}}{{template "icon-paperclip" $}}{{end}}<span class="font-mono">{{if $att.OriginalName}}{{$att.OriginalName}}{{else}}{{$att.RelPath}}{{end}}</span></a>
           {{- end}}
         {{- end}}
       </div>
@@ -311,6 +322,26 @@
       {{- end}}
     </div>
   </div>
+  {{- /* Lightbox overlays for this row's renderable images. Emitted as SIBLINGS
+         of the .msg-row (children of .transcript), never nested inside it: the
+         row carries content-visibility:auto (input.css SPEC-0008 REQ-0008-011),
+         which establishes a containing block for fixed-positioned descendants —
+         nesting the overlay would make .lightbox:target's `inset:0` cover only
+         the row, not the viewport. Out here it pins to the viewport exactly like
+         the gallery's grid-child overlays. display:none until :target, so these
+         add no visible layout to the transcript flow. Same markup/classes as
+         gallery_images_page — no new CSS, no JS (CSP-safe). */}}
+  {{- if .Attachments}}
+    {{- range $ai, $att := .Attachments}}
+      {{- if and (eq $att.Kind "image") (imgRenderable $.Source $.ConvName $att.RelPath)}}
+  <div class="lightbox" id="lb-m{{$msgID}}-{{$ai}}">
+    <a class="toolbar-icon-btn lightbox-close absolute top-4 right-4" href="#" title="close">✕</a>
+    <img loading="lazy" src="{{mediaURL $.ActiveID $att.RelPath}}" alt="{{$att.OriginalName}}">
+    <div class="text-sm lightbox-caption"><span class="font-mono">{{if $att.OriginalName}}{{$att.OriginalName}}{{else}}{{$att.RelPath}}{{end}}</span></div>
+  </div>
+      {{- end}}
+    {{- end}}
+  {{- end}}
     {{- $prevDate = $date}}
     {{- $prevSender = .Sender}}
   {{- end}}
