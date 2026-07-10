@@ -57,6 +57,60 @@ func TestGalleryFilesTab(t *testing.T) {
 	}
 }
 
+// fileAnchorRE isolates the file card's download anchor so a test can assert
+// its attributes without matching the unrelated meta-row links in the card.
+var fileAnchorRE = regexp.MustCompile(`<a class="media-file-name"[^>]*>`)
+
+// TestGalleryFilesDownloadNotBoosted is the issue #4 regression: the file
+// card's download anchor must carry hx-boost="false" so htmx never AJAX-swaps
+// the click — the binary /media response can't be swapped into #main-content,
+// which is exactly the "clicking a file does nothing" symptom. It must also
+// keep its download attribute (issue #161). The check runs on BOTH the initial
+// files tab AND an infinite-scroll continuation fragment, since both are the
+// one gallery_files_page template define.
+func TestGalleryFilesDownloadNotBoosted(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	for _, path := range []string{"/gallery?tab=files", "/gallery/items?tab=files"} {
+		rec := get(t, srv, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, rec.Code)
+		}
+		anchors := fileAnchorRE.FindAllString(rec.Body.String(), -1)
+		if len(anchors) == 0 {
+			t.Fatalf("GET %s rendered no file download anchors", path)
+		}
+		for _, a := range anchors {
+			if !strings.Contains(a, `hx-boost="false"`) {
+				t.Errorf("GET %s: file anchor not opted out of hx-boost: %s", path, a)
+			}
+			if !strings.Contains(a, "download=") {
+				t.Errorf("GET %s: file anchor lost its download attribute: %s", path, a)
+			}
+		}
+	}
+}
+
+// TestMediaServesAttachment is the server-side half of issue #4: a non-image
+// attachment must come back with Content-Disposition: attachment so the native
+// (un-boosted) anchor navigation downloads it rather than trying to render a
+// raw binary in the page.
+func TestMediaServesAttachment(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	conv, _ := st.GetConversation(context.Background(), "Harper")
+
+	rec := get(t, srv, "/media/"+itoa(conv.ID)+"/media/lease.pdf")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+		t.Errorf("Content-Disposition = %q, want attachment", cd)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/pdf") {
+		t.Errorf("Content-Type = %q, want application/pdf", ct)
+	}
+}
+
 func TestGalleryLinksTab(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	rec := get(t, srv, "/gallery?tab=links")
