@@ -54,7 +54,11 @@
          engine state, per-peer connection, and per-folder health/completion —
          Syncthing's state surfaced HERE so the user never opens its GUI.
          Disabled (the default) renders one neutral line; enabled-but-
-         unreadable renders a pointer to Logs instead of fake numbers. */}}
+         unreadable renders a pointer to Logs instead of fake numbers.
+
+         Gated on DeviceSyncFeature (the `devicesync` build tag): a release build
+         omits the feature, so this whole block is absent. */}}
+    {{- if .DeviceSyncFeature}}
     {{if not .DeviceSyncEnabled}}
     <p class="status-note">Device sync is off (the default). Pair devices from Settings after enabling
       <code class="font-mono">device_sync</code> in your config.</p>
@@ -118,6 +122,7 @@
       {{end}}
     </div>
     {{end}}
+    {{- end}}
 
     {{/* The snapshots card renders only where a snapshot pipeline exists
          (issue #164): recorded snapshots, or a .snapshots dir in the signal

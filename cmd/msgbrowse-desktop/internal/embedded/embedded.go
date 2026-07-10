@@ -141,10 +141,10 @@ type Server struct {
 	MCPURL string
 
 	store     *store.Store
-	onboard   *onboard.Runner // Setup Enable worker registry; torn down on Close
-	sync      *deviceSync     // supervised device-sync stack, nil when sync is disabled or failed to start
-	done      chan struct{}   // closed when the serve loop has exited
-	serveErr  error           // set before done is closed
+	onboard   *onboard.Runner  // Setup Enable worker registry; torn down on Close
+	sync      deviceSyncHandle // device-sync stack (nil when disabled, failed, or the feature is not compiled in)
+	done      chan struct{}    // closed when the serve loop has exited
+	serveErr  error            // set before done is closed
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -201,6 +201,12 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Op
 		return nil, err
 	}
 
+	// Background provider auto-refresh (replaces the retired "Refresh all
+	// sources" button): re-import each Enabled source's delta on the configured
+	// cadence. No-op when disabled (providers.refresh_interval <= 0); drains
+	// with the Start context.
+	go srv.StartAutoRefresh(ctx, cfg.Providers.RefreshInterval)
+
 	// One live LLM provider for the whole app (issue #191): the MCP server
 	// and the Settings → LLM tab share this holder, so a save on the tab
 	// swaps the client and semantic search uses the new endpoint on its very
@@ -238,19 +244,18 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Op
 	// engine must not brick the message browser (documented handling per
 	// SPEC-0014 REQ "Error Handling Standards"; the doctor/status story
 	// surfaces the condition in the UI).
-	sup, err := startDeviceSync(ctx, cfg, st, onboardRunner, log)
+	// Device sync (ADR-0021) is gated behind the `devicesync` build tag and is
+	// NOT compiled into release binaries. wireDeviceSync is the real wiring
+	// under the tag (engine + pairing manager + status/roles monitor +
+	// folder-watch worker, all wired into the web server) and a no-op stub
+	// without it; deviceSyncCompiledIn tells the web UI whether to render the
+	// Device sync surface. A sync-engine failure is logged and the app keeps
+	// serving (SPEC-0014 REQ "Error Handling Standards").
+	srv.SetDeviceSyncFeature(deviceSyncCompiledIn)
+	sup, err := wireDeviceSync(ctx, srv, cfg, st, onboardRunner, log)
 	if err != nil {
 		log.Error("device sync failed to start; continuing without sync", "error", err)
 		sup = nil
-	}
-	if sup != nil {
-		// Wire the /settings pairing section, the status/roles monitor, and
-		// the Logs event feed to the live engine before the serve goroutine
-		// starts (the SetPairingSource wiring contract; #158 SPEC-0014 REQ
-		// "Status and Doctor Surfacing").
-		srv.SetPairingSource(sup.Manager)
-		srv.SetSyncMonitor(sup.Manager)
-		srv.SetSyncNotes(sup.Notes.Snapshot)
 	}
 
 	base := "http://" + ln.Addr().String()
@@ -289,6 +294,7 @@ func newLLMHolder(cfg *config.Config) *llm.Holder {
 		BaseURL:    cfg.LLM.BaseURL,
 		EmbedModel: cfg.LLM.EmbedModel,
 		ChatModel:  cfg.LLM.ChatModel,
+		APIKey:     cfg.LLM.APIKey,
 	})
 }
 
@@ -310,17 +316,17 @@ func llmConfigSavePath(cfg *config.Config) (string, error) {
 }
 
 // newLLMApplier builds the web layer's LLMConfigurator over holder, exactly
-// like internal/cli's helper: persist the three llm keys into the resolved
-// config file, then swap the live client. The API key stays the
-// boot-resolved value (MSGBROWSE_LLM_API_KEY / config file) — never editable
-// or displayed on the tab.
+// like internal/cli's helper: persist the llm keys (base URL, both models,
+// and the API key) into the resolved config file, then swap the live client.
+// The key is editable from the tab and stored in the 0600 config file
+// (Option A — a desktop user has no handy env var).
 func newLLMApplier(cfg *config.Config, holder *llm.Holder) *llm.Applier {
-	return llm.NewApplier(holder, cfg.LLM.APIKey, cfg.LLM.Timeout, func(s llm.Settings) error {
+	return llm.NewApplier(holder, cfg.LLM.Timeout, func(s llm.Settings) error {
 		path, err := llmConfigSavePath(cfg)
 		if err != nil {
 			return err
 		}
-		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel)
+		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel, s.APIKey)
 	})
 }
 
@@ -394,11 +400,10 @@ func (e *Server) Close() error {
 		// shutdown of the Syncthing child AND the folder-watch worker's
 		// goroutines — no orphan process, no leaked worker outlives the app
 		// (SPEC-0014 "App quit stops the daemon", REQ "Concurrency Safety").
+		// nil in the default build (feature not compiled in) or when sync was
+		// disabled/failed.
 		if e.sync != nil {
-			if serr := e.sync.Sup.Wait(); serr != nil {
-				slog.Error("device-sync supervisor exited with error", "error", serr)
-			}
-			e.sync.Watcher.Wait()
+			e.sync.Drain()
 		}
 		err := e.store.Close()
 		if e.serveErr != nil {

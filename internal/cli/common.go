@@ -52,6 +52,7 @@ func newLLMHolder(cfg *config.Config) *llm.Holder {
 		BaseURL:    cfg.LLM.BaseURL,
 		EmbedModel: cfg.LLM.EmbedModel,
 		ChatModel:  cfg.LLM.ChatModel,
+		APIKey:     cfg.LLM.APIKey,
 	})
 }
 
@@ -72,16 +73,17 @@ func llmConfigSavePath(cfg *config.Config) (string, error) {
 }
 
 // newLLMApplier builds the web layer's LLMConfigurator over holder: persist
-// the three llm keys into the resolved config file, then swap the live
-// client. The API key stays the boot-resolved value (MSGBROWSE_LLM_API_KEY /
-// config, per the config posture) — it is not editable from the tab.
+// the llm keys (base URL, both models, and the API key) into the resolved
+// config file, then swap the live client. The key is editable from the tab
+// and stored in the 0600 config file (Option A — a desktop user has no handy
+// env var).
 func newLLMApplier(cfg *config.Config, holder *llm.Holder) *llm.Applier {
-	return llm.NewApplier(holder, cfg.LLM.APIKey, cfg.LLM.Timeout, func(s llm.Settings) error {
+	return llm.NewApplier(holder, cfg.LLM.Timeout, func(s llm.Settings) error {
 		path, err := llmConfigSavePath(cfg)
 		if err != nil {
 			return err
 		}
-		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel)
+		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel, s.APIKey)
 	})
 }
 

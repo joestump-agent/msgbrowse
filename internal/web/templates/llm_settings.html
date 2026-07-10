@@ -4,11 +4,12 @@
      *_content pattern): <title> keeps history entries titled; the define owns
      <main id="main-content"> so partial responses carry no shell.
 
-     The Settings → LLM tab (issue #191): exactly three fields — Base URL,
-     Embed model, Facts model (llm.chat_model) — and deliberately NO API-key
-     field: keys come from the MSGBROWSE_LLM_API_KEY environment variable only
-     (internal/config posture), so a key never lands in a form, a page, or the
-     config file. The form is boosted (hx-boost on the form itself), so a save
+     The Settings → LLM tab (issue #191): Base URL, Embed model, Facts model
+     (llm.chat_model), and an API key. The key is a write-only secret field —
+     its value is never rendered back (the form shows only whether one is set),
+     a blank submission keeps the current key, and it is persisted to the 0600
+     config file (MSGBROWSE_LLM_API_KEY still overrides at boot). The form is
+     boosted (hx-boost on the form itself), so a save
      swaps only #main-content; without JS it degrades to a plain same-origin
      form POST through the identical handler. All feedback states are
      fixed-enum banners; the echoed field values pass through html/template
@@ -103,12 +104,29 @@
             the journal digest later); stored as <code class="font-mono">llm.chat_model</code>.</p>
         </div>
 
+        <div class="space-y-1">
+          <label class="eyebrow block" for="llm-api-key">API key</label>
+          {{/* Secret field: type=password, autocomplete off, and the value is
+               NEVER rendered back (only whether one is set). A blank submission
+               keeps the current key; type a new one to replace it. */}}
+          <input id="llm-api-key" name="api_key" type="password" class="filter-input w-full font-mono"
+                 value="" autocomplete="off" spellcheck="false"
+                 placeholder="{{if .HasAPIKey}}•••••••• (a key is set — leave blank to keep it){{else}}none set — a local proxy needs none{{end}}"
+                 {{if .ErrAPIKey}}aria-invalid="true" aria-describedby="llm-api-key-error"{{else}}aria-describedby="llm-api-key-hint"{{end}}>
+          {{- if .ErrAPIKey}}
+          <p id="llm-api-key-error" class="setup-note setup-note-warn">
+            {{- if eq .ErrAPIKey "toolong"}}That API key is too long.
+            {{- else}}That API key contains characters that are not allowed.{{end}}</p>
+          {{- end}}
+          <p id="llm-api-key-hint" class="status-note">Only needed if your endpoint requires one. Stored in
+            this app's config file (<code class="font-mono">llm.api_key</code>, mode 0600); leave blank to
+            keep the current key. The <code class="font-mono">MSGBROWSE_LLM_API_KEY</code> environment
+            variable, if set, still overrides it at startup.</p>
+        </div>
+
         <button type="submit" class="setup-btn">Save and apply</button>
       </form>
 
-      <p class="status-note">There is no API-key field on purpose: an endpoint that requires a key reads
-        it from the <code class="font-mono">MSGBROWSE_LLM_API_KEY</code> environment variable — keys are
-        never stored in this app's config file.</p>
       <p class="status-note">msgbrowse's only network egress goes to this URL; the default points at a
         local proxy, and routing message content to a hosted provider is a deliberate choice (ADR-0010).</p>
     </section>

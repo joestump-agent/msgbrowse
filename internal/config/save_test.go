@@ -11,11 +11,11 @@ import (
 )
 
 // TestSaveLLMCreatesMinimalFile: with no config file present, SaveLLM creates
-// one containing ONLY the llm block with the three user-editable keys — never
-// a dump of the full default config, and never an api_key.
+// one containing ONLY the llm block with the four user-editable keys (Option A
+// includes api_key) — never a dump of the full default config.
 func TestSaveLLMCreatesMinimalFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
-	if err := SaveLLM(path, "http://127.0.0.1:11434/v1", "nomic-embed-text", "llama3"); err != nil {
+	if err := SaveLLM(path, "http://127.0.0.1:11434/v1", "nomic-embed-text", "llama3", "sk-abc123"); err != nil {
 		t.Fatalf("SaveLLM: %v", err)
 	}
 
@@ -34,16 +34,14 @@ func TestSaveLLMCreatesMinimalFile(t *testing.T) {
 	if llmBlock == nil {
 		t.Fatalf("no llm block in %s", b)
 	}
-	if len(llmBlock) != 3 {
-		t.Errorf("llm block has %d keys, want exactly 3: %v", len(llmBlock), llmBlock)
+	if len(llmBlock) != 4 {
+		t.Errorf("llm block has %d keys, want exactly 4: %v", len(llmBlock), llmBlock)
 	}
 	if llmBlock["base_url"] != "http://127.0.0.1:11434/v1" ||
 		llmBlock["embed_model"] != "nomic-embed-text" ||
-		llmBlock["chat_model"] != "llama3" {
+		llmBlock["chat_model"] != "llama3" ||
+		llmBlock["api_key"] != "sk-abc123" {
 		t.Errorf("llm block = %v", llmBlock)
-	}
-	if _, ok := llmBlock["api_key"]; ok {
-		t.Error("SaveLLM wrote an api_key — it must never do that")
 	}
 
 	if runtime.GOOS != "windows" {
@@ -58,8 +56,10 @@ func TestSaveLLMCreatesMinimalFile(t *testing.T) {
 }
 
 // TestSaveLLMPreservesUnrelatedKeys is the surgical-merge contract: only the
-// three llm.* keys change; every unrelated key — top-level and inside the llm
-// block (including a pre-existing api_key) — round-trips unchanged.
+// managed llm.* keys change; every unrelated key — top-level and inside the
+// llm block — round-trips unchanged. The caller preserves an existing api_key
+// by passing it back (the web handler does this for a blank field), so here we
+// pass the pre-existing key through and confirm it survives.
 func TestSaveLLMPreservesUnrelatedKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	existing := "" +
@@ -75,8 +75,9 @@ func TestSaveLLMPreservesUnrelatedKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Empty embed model is allowed and means semantic search off.
-	if err := SaveLLM(path, "https://llm.example/v1", "", "facts-model"); err != nil {
+	// Empty embed model is allowed and means semantic search off. The caller
+	// passes the pre-existing key back to preserve it (blank-field semantics).
+	if err := SaveLLM(path, "https://llm.example/v1", "", "facts-model", "synthetic-placeholder"); err != nil {
 		t.Fatalf("SaveLLM: %v", err)
 	}
 
@@ -117,7 +118,7 @@ func TestSaveLLMPreservesUnrelatedKeys(t *testing.T) {
 // model overriding the built-in default (semantic search off).
 func TestSaveLLMRoundTripsThroughLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := SaveLLM(path, "http://127.0.0.1:8080/v1", "", "my-chat"); err != nil {
+	if err := SaveLLM(path, "http://127.0.0.1:8080/v1", "", "my-chat", ""); err != nil {
 		t.Fatalf("SaveLLM: %v", err)
 	}
 	v, err := Load(path)
@@ -154,7 +155,7 @@ func TestSaveLLMRejectsMalformedExisting(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not yaml: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := SaveLLM(path, "http://x.invalid/v1", "e", "c")
+	err := SaveLLM(path, "http://x.invalid/v1", "e", "c", "")
 	if err == nil {
 		t.Fatal("SaveLLM should refuse to overwrite a file it cannot parse")
 	}

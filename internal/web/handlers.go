@@ -177,6 +177,10 @@ type statusData struct {
 	// REQ "Status and Doctor Surfacing" (#158).
 	DeviceSyncEnabled bool
 	Sync              *devsync.Status
+	// DeviceSyncFeature gates the entire Device sync card: false (the default
+	// release build, feature not compiled in behind the `devicesync` tag) omits
+	// it so /status carries no dead surface.
+	DeviceSyncFeature bool
 }
 
 // pageSize is the number of messages per transcript page.
@@ -514,6 +518,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		SnapshotFootprint:   footprint,
 		HasSnapshotPipeline: len(snaps) > 0 || s.signalSnapshotsDirExists(),
 		DeviceSyncEnabled:   s.deviceSyncEnabled,
+		DeviceSyncFeature:   s.deviceSyncFeature,
 		Sync:                s.syncStatusSnapshot(ctx),
 	})
 }

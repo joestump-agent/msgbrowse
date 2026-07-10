@@ -33,6 +33,9 @@ func newPairServer(t *testing.T, ps PairingSource) *Server {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	// The device-sync UI is gated behind the compile-time feature flag; the
+	// tagged build that wires pairing also sets it, so mirror that here.
+	srv.SetDeviceSyncFeature(true)
 	if ps != nil {
 		srv.SetPairingSource(ps)
 	}

@@ -107,8 +107,12 @@ func TestSetupFullPageRendersCards(t *testing.T) {
 			t.Errorf("full /setup missing card %q", want)
 		}
 	}
-	if n := strings.Count(body, `class="setup-card `); n != 3 {
-		t.Errorf("full /setup rendered %d source cards, want 3", n)
+	// Three real source cards plus the Telegram "coming soon" placeholder = 4.
+	if n := strings.Count(body, `class="setup-card `); n != 4 {
+		t.Errorf("full /setup rendered %d cards, want 4 (3 sources + Telegram coming-soon)", n)
+	}
+	if !contains(body, `aria-label="Telegram: coming soon"`) {
+		t.Errorf("full /setup missing the Telegram coming-soon card")
 	}
 }
 
@@ -325,10 +329,11 @@ func TestBuiltCSSCarriesSetupComponents(t *testing.T) {
 		".setup-guide-steps",
 		".setup-guide-result",
 		".setup-guide-close:focus-visible", // keyboard focus on the close control
-		// All-sources Refresh control (#135): the drift guard must carry the new
-		// classes so a stale app.css cannot ship the refresh control unstyled.
-		".setup-refresh-all",
-		".setup-refresh-all-result",
+		// Providers 2×2 grid + Telegram "coming soon" card: the drift guard must
+		// carry the new classes so a stale app.css cannot ship them unstyled.
+		".setup-card-coming-soon",
+		".setup-badge-coming-soon",
+		".src-telegram",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("built app.css missing %q (rebuild: rm -rf .tools && make css)", want)

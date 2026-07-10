@@ -31,6 +31,7 @@ import (
 const (
 	llmBaseURLMaxLen = 2048
 	llmModelMaxLen   = 128
+	llmAPIKeyMaxLen  = 512
 )
 
 // LLMConfigurator is the live-settings seam behind the LLM tab (the
@@ -61,6 +62,10 @@ type llmSettingsData struct {
 	BaseURL    string
 	EmbedModel string
 	FactsModel string
+	// HasAPIKey reports whether a key is currently set, so the template can show
+	// a "key is set" placeholder without ever rendering the secret. The key
+	// value is NEVER echoed into the form (a blank field means "keep it").
+	HasAPIKey bool
 	// SetupToken is the per-session token the form submits through the same
 	// checkSetupPOST gate the Setup POSTs use.
 	SetupToken string
@@ -72,12 +77,13 @@ type llmSettingsData struct {
 	ErrBaseURL    string
 	ErrEmbedModel string
 	ErrFactsModel string
+	ErrAPIKey     string
 }
 
 // HasErrors reports whether any field failed validation, for the template's
 // summary banner.
 func (d llmSettingsData) HasErrors() bool {
-	return d.ErrBaseURL != "" || d.ErrEmbedModel != "" || d.ErrFactsModel != ""
+	return d.ErrBaseURL != "" || d.ErrEmbedModel != "" || d.ErrFactsModel != "" || d.ErrAPIKey != ""
 }
 
 // currentLLM resolves the effective settings for display: the live
@@ -98,6 +104,7 @@ func (s *Server) handleSettingsLLM(w http.ResponseWriter, r *http.Request) {
 		BaseURL:    cur.BaseURL,
 		EmbedModel: cur.EmbedModel,
 		FactsModel: cur.ChatModel,
+		HasAPIKey:  cur.APIKey != "",
 	})
 }
 
@@ -112,14 +119,26 @@ func (s *Server) handleSettingsLLMSave(w http.ResponseWriter, r *http.Request) {
 		return // 403 already written; nothing was validated or applied
 	}
 
+	// The API key is a password field we never echo, so a BLANK field means
+	// "keep the current key" — only a non-blank value changes it (the standard
+	// secret-field UX; it also means the form can't accidentally wipe a key on
+	// an unrelated save). The effective key is resolved against the live value.
+	apiKey := strings.TrimSpace(r.PostFormValue("api_key"))
+	keptKey := apiKey == ""
+	if keptKey {
+		apiKey = s.currentLLM().APIKey
+	}
+
 	data := llmSettingsData{
 		BaseURL:    strings.TrimSpace(r.PostFormValue("base_url")),
 		EmbedModel: strings.TrimSpace(r.PostFormValue("embed_model")),
 		FactsModel: strings.TrimSpace(r.PostFormValue("facts_model")),
+		HasAPIKey:  apiKey != "",
 	}
 	data.ErrBaseURL = validateLLMBaseURL(data.BaseURL)
 	data.ErrEmbedModel = validateLLMModel(data.EmbedModel)
 	data.ErrFactsModel = validateLLMModel(data.FactsModel)
+	data.ErrAPIKey = validateLLMAPIKey(apiKey)
 	if data.HasErrors() {
 		s.renderLLMSettings(w, r, data)
 		return
@@ -134,6 +153,7 @@ func (s *Server) handleSettingsLLMSave(w http.ResponseWriter, r *http.Request) {
 		BaseURL:    data.BaseURL,
 		EmbedModel: data.EmbedModel,
 		ChatModel:  data.FactsModel,
+		APIKey:     apiKey,
 	}); err != nil {
 		s.log.Error("LLM settings save failed", "error", err)
 		data.SaveResult = "error"
@@ -141,15 +161,18 @@ func (s *Server) handleSettingsLLMSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Endpoint/model names are configuration, never message content — safe to
-	// log (the API key is not part of Settings at all).
+	// log. The API key value is NEVER logged; only whether one is set and
+	// whether this save changed it.
 	s.log.Info("LLM settings saved and applied live",
-		"base_url", data.BaseURL, "embed_model", data.EmbedModel, "chat_model", data.FactsModel)
+		"base_url", data.BaseURL, "embed_model", data.EmbedModel, "chat_model", data.FactsModel,
+		"api_key_set", apiKey != "", "api_key_changed", !keptKey)
 
 	cur := s.llmConfig.CurrentLLM()
 	s.renderLLMSettings(w, r, llmSettingsData{
 		BaseURL:    cur.BaseURL,
 		EmbedModel: cur.EmbedModel,
 		FactsModel: cur.ChatModel,
+		HasAPIKey:  cur.APIKey != "",
 		SaveResult: "ok",
 	})
 }
@@ -202,6 +225,22 @@ func validateLLMBaseURL(raw string) string {
 	}
 	if u.Host == "" {
 		return "invalid"
+	}
+	return ""
+}
+
+// validateLLMAPIKey checks the API key: bounded length and printable runes
+// only (keys are opaque ASCII/base64-ish tokens). Empty is VALID — many local
+// proxies need none, and an empty submission means "keep the current key"
+// upstream. Returns "" or a fixed error enum ("toolong" / "invalid").
+func validateLLMAPIKey(k string) string {
+	if len(k) > llmAPIKeyMaxLen {
+		return "toolong"
+	}
+	for _, r := range k {
+		if !unicode.IsPrint(r) {
+			return "invalid"
+		}
 	}
 	return ""
 }

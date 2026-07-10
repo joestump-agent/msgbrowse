@@ -1,3 +1,5 @@
+//go:build devicesync
+
 // doctor's device-sync checks under the Syncthing engine (ADR-0021), the
 // #158 status/doctor story: disabled remains the healthy default (pass, not
 // warn); enabled gets the full condition ladder from SPEC-0014 REQ "Status

@@ -8,7 +8,36 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 )
+
+// LastSyncTimes returns the most recent successful ingest time per source —
+// the "Last synced" stamp the Providers cards show (auto-refresh and manual
+// Refresh both record an ingest_runs row on completion). Keyed by source id;
+// sources that have never completed a run are absent. finished_at is stored as
+// RFC3339 UTC, so MAX() over the column is a correct chronological pick.
+func (s *Store) LastSyncTimes(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT source, MAX(finished_at) FROM ingest_runs GROUP BY source`)
+	if err != nil {
+		return nil, fmt.Errorf("last sync times: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]time.Time)
+	for rows.Next() {
+		var src, finished string
+		if err := rows.Scan(&src, &finished); err != nil {
+			return nil, fmt.Errorf("scan last sync time: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339, finished); err == nil {
+			out[src] = t
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("last sync times rows: %w", err)
+	}
+	return out, nil
+}
 
 // SourceCount is one source's imported footprint: how many conversations and
 // messages the store holds for it.

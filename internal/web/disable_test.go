@@ -203,8 +203,8 @@ func TestEnabledCardShowsCountsAndControls(t *testing.T) {
 	if contains(body, "No sources are ready to enable") {
 		t.Errorf("/providers footer shows the empty state while a source is Enabled")
 	}
-	if !contains(body, "All detected sources are enabled") {
-		t.Errorf("/providers footer missing the all-enabled copy")
+	if !contains(body, "refresh automatically") {
+		t.Errorf("/providers footer missing the auto-refresh copy")
 	}
 }
 

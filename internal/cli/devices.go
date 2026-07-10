@@ -1,3 +1,5 @@
+//go:build devicesync
+
 // The `msgbrowse devices` namespace under the Syncthing sync engine
 // (ADR-0021 supersedes ADR-0018). The SPEC-0011 surface this file used to
 // hold — pairing windows, token payloads, the mTLS listener client, unpair

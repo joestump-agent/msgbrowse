@@ -1,7 +1,7 @@
 // Headless end-to-end coverage for the desktop LLM settings wiring (issue
 // #191): the embedded server serves the Settings → LLM tab, and a gated save
-// over the real loopback socket persists the three llm keys into the loaded
-// config file. Pure Go, CGO_ENABLED=0, no webview.
+// over the real loopback socket persists the llm keys — including the API key
+// (Option A) — into the loaded config file. Pure Go, CGO_ENABLED=0, no webview.
 package embedded
 
 import (
@@ -50,13 +50,10 @@ func TestLLMSettingsSaveEndToEnd(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /settings/llm status = %d", resp.StatusCode)
 	}
-	for _, want := range []string{`name="base_url"`, `name="embed_model"`, `name="facts_model"`, "MSGBROWSE_LLM_API_KEY"} {
+	for _, want := range []string{`name="base_url"`, `name="embed_model"`, `name="facts_model"`, `name="api_key"`, "MSGBROWSE_LLM_API_KEY"} {
 		if !strings.Contains(string(page), want) {
 			t.Errorf("LLM tab missing %q", want)
 		}
-	}
-	if strings.Contains(string(page), `name="api_key"`) {
-		t.Error("LLM tab rendered an api_key input")
 	}
 	m := setupTokenRe.FindSubmatch(page)
 	if m == nil {
@@ -69,6 +66,7 @@ func TestLLMSettingsSaveEndToEnd(t *testing.T) {
 		"base_url":    {"http://127.0.0.1:11434/v1"},
 		"embed_model": {"nomic-embed-text"},
 		"facts_model": {"llama3"},
+		"api_key":     {"sk-desktop-key"},
 	}
 	req, err := http.NewRequest(http.MethodPost, es.URL+"/settings/llm", strings.NewReader(form.Encode()))
 	if err != nil {
@@ -98,13 +96,15 @@ func TestLLMSettingsSaveEndToEnd(t *testing.T) {
 		"base_url: http://127.0.0.1:11434/v1",
 		"embed_model: nomic-embed-text",
 		"chat_model: llama3",
+		"api_key: sk-desktop-key",
 	} {
 		if !strings.Contains(string(saved), want) {
 			t.Errorf("saved config missing %q:\n%s", want, saved)
 		}
 	}
-	if strings.Contains(string(saved), "api_key") {
-		t.Errorf("saved config gained an api_key:\n%s", saved)
+	// The secret is never rendered back into the page.
+	if strings.Contains(string(body), "sk-desktop-key") {
+		t.Error("the API key value must never be echoed into the LLM tab HTML")
 	}
 
 	// And a cross-origin replay with a fresh valid token is rejected 403 —

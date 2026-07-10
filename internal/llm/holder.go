@@ -13,10 +13,10 @@ import (
 )
 
 // Settings are the user-configurable LLM endpoint values the Settings → LLM
-// tab edits: the base URL plus the two model names. The API key is
-// deliberately absent — per the config posture (internal/config), keys come
-// from the MSGBROWSE_LLM_API_KEY environment variable and are never round-
-// tripped through the settings surface.
+// tab edits: the base URL, the two model names, and the API key. The key is
+// editable from the tab and persisted to the config file (a deliberate
+// product choice — a desktop user has no convenient env var; the config file
+// is 0600, ADR-0010's loopback single-user trust).
 type Settings struct {
 	// BaseURL is the OpenAI-compatible endpoint — the only network egress
 	// msgbrowse performs (ADR-0010).
@@ -27,6 +27,10 @@ type Settings struct {
 	// ChatModel is the completion model ("Facts model" in the UI: the facts
 	// feature consumes it today, the journal digest later).
 	ChatModel string
+	// APIKey authenticates to a keyed endpoint. Empty for a local proxy that
+	// needs none. Held in memory and persisted to the config file; it is never
+	// rendered back into the tab's HTML (the form shows only whether one is set).
+	APIKey string
 }
 
 // Holder is a swappable Client: it implements the Client interface by
@@ -100,17 +104,15 @@ func (h *Holder) Vision(ctx context.Context, image []byte, mimeType, prompt stri
 
 // Applier binds a Holder to a persistence function: it is the object the web
 // layer's Settings → LLM tab drives (web.LLMConfigurator). ApplyLLM persists
-// the three user-editable keys FIRST and only then swaps the live client, so
-// a failed write leaves the running provider untouched and the page can
-// report the error honestly.
+// the settings FIRST and only then swaps the live client, so a failed write
+// leaves the running provider untouched and the page can report the error
+// honestly.
 //
-// The API key and timeout are process-lifetime values captured at wiring time
-// (the key comes from MSGBROWSE_LLM_API_KEY / the config file per the
-// internal/config posture; neither is editable from the tab), reused for
-// every rebuilt client.
+// timeout is a process-lifetime value captured at wiring time, reused for
+// every rebuilt client. The API key now travels in Settings (editable from
+// the tab), so each swap rebuilds the client with the settings' own key.
 type Applier struct {
 	holder  *Holder
-	apiKey  string
 	timeout time.Duration
 	persist func(Settings) error
 }
@@ -118,15 +120,15 @@ type Applier struct {
 // NewApplier builds an Applier over holder. persist writes the settings to
 // the mode-appropriate config file (config.SaveLLM behind a path the wiring
 // layer resolved); a nil persist skips persistence (tests).
-func NewApplier(holder *Holder, apiKey string, timeout time.Duration, persist func(Settings) error) *Applier {
-	return &Applier{holder: holder, apiKey: apiKey, timeout: timeout, persist: persist}
+func NewApplier(holder *Holder, timeout time.Duration, persist func(Settings) error) *Applier {
+	return &Applier{holder: holder, timeout: timeout, persist: persist}
 }
 
 // CurrentLLM returns the settings behind the live client.
 func (a *Applier) CurrentLLM() Settings { return a.holder.Settings() }
 
-// ApplyLLM persists s and then swaps the live client to one built from it.
-// On a persist error nothing is swapped.
+// ApplyLLM persists s and then swaps the live client to one built from it —
+// including its API key. On a persist error nothing is swapped.
 func (a *Applier) ApplyLLM(s Settings) error {
 	if a.persist != nil {
 		if err := a.persist(s); err != nil {
@@ -135,7 +137,7 @@ func (a *Applier) ApplyLLM(s Settings) error {
 	}
 	a.holder.Swap(New(Options{
 		BaseURL:    s.BaseURL,
-		APIKey:     a.apiKey,
+		APIKey:     s.APIKey,
 		ChatModel:  s.ChatModel,
 		EmbedModel: s.EmbedModel,
 		Timeout:    a.timeout,

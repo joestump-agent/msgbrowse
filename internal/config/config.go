@@ -58,6 +58,10 @@ type Config struct {
 	// RAG synthesis, and journal digests.
 	LLM LLMConfig `mapstructure:"llm"`
 
+	// Providers configures the in-app message-source ("Providers") surface,
+	// including how often Enabled sources auto-refresh.
+	Providers ProvidersConfig `mapstructure:"providers"`
+
 	// VectorBackend selects the vector store: "sqlite-vec" (default) or "qdrant".
 	VectorBackend string `mapstructure:"vector_backend"`
 
@@ -126,6 +130,16 @@ type DeviceSyncConfig struct {
 	SyncthingBin string `mapstructure:"syncthing_bin"`
 }
 
+// ProvidersConfig configures the in-app Providers surface. `serve` and the
+// desktop shell run a background scheduler that re-imports each Enabled source's
+// delta every RefreshInterval, so the archive stays current without a click.
+type ProvidersConfig struct {
+	// RefreshInterval is how often Enabled sources auto-refresh (export +
+	// incremental import). Zero (or negative) turns auto-refresh off, leaving
+	// only the per-source manual Refresh control.
+	RefreshInterval time.Duration `mapstructure:"refresh_interval"`
+}
+
 // LLMConfig configures the OpenAI-compatible client. BaseURL is the only network
 // egress msgbrowse performs; by default it points at a local LiteLLM proxy.
 type LLMConfig struct {
@@ -191,6 +205,11 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("llm.embed_model", "local-embed")
 	v.SetDefault("llm.max_concurrency", 4)
 	v.SetDefault("llm.timeout", 60*time.Second)
+
+	// Providers auto-refresh: re-import each Enabled source's delta on this
+	// cadence. 6h keeps archives current without hammering the exporters; set
+	// providers.refresh_interval to 0 to disable.
+	v.SetDefault("providers.refresh_interval", 6*time.Hour)
 
 	v.SetDefault("vector_backend", "sqlite-vec")
 
