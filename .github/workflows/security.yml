@@ -1,0 +1,69 @@
+name: Security
+
+# govulncheck over both Go modules (the core and the desktop shell). Unlike a
+# plain dependency-version audit, govulncheck reports only vulnerabilities in
+# code paths the modules actually reach, so findings are actionable.
+#
+# Scheduling rationale: new vulnerabilities are published against dependencies
+# we already have, not just when we bump them — so this runs weekly against
+# main (and on demand) in addition to gating PRs that touch the module graphs.
+# It is deliberately NOT a required branch-protection check: it is
+# path-filtered on PRs, and a newly published vuln in an unrelated dependency
+# must not turn every open PR red.
+on:
+  pull_request:
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - "cmd/msgbrowse-desktop/go.mod"
+      - "cmd/msgbrowse-desktop/go.sum"
+      - ".github/workflows/security.yml"
+  push:
+    branches: [main]
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - "cmd/msgbrowse-desktop/go.mod"
+      - "cmd/msgbrowse-desktop/go.sum"
+      - ".github/workflows/security.yml"
+  schedule:
+    # Weekly, Monday 06:23 UTC (off the :00 spike so scheduled runs aren't
+    # queued behind everyone else's).
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    # The core is CGO_ENABLED=0 everywhere else in CI; keep the scan honest to
+    # the shipped build.
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            cmd/msgbrowse-desktop/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Scan core module
+        run: govulncheck ./...
+
+      # The desktop shell is its own Go module (cmd/msgbrowse-desktop/go.mod).
+      # Without the `desktop` build tag this scans the same pure-Go surface the
+      # headless tests cover — the cgo/webview code needs GTK headers and is
+      # exercised by desktop.yml instead.
+      - name: Scan desktop module
+        working-directory: cmd/msgbrowse-desktop
+        run: govulncheck ./...

@@ -1,0 +1,39 @@
+# Dependabot: weekly dependency PRs for both Go modules, the Actions pins in
+# .github/workflows, and the Docusaurus site. Minor + patch bumps are grouped
+# into one PR per ecosystem so the weekly noise is a handful of PRs, not
+# dozens; majors stay individual because they usually need real review.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # The desktop shell is a separate Go module with its own go.mod (see
+  # Makefile: it is the repo's only cgo code, quarantined from the core).
+  - package-ecosystem: gomod
+    directory: "/cmd/msgbrowse-desktop"
+    schedule:
+      interval: weekly
+    groups:
+      desktop-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/docs-site"
+    schedule:
+      interval: weekly
+    groups:
+      docs-site-minor-and-patch:
+        update-types: ["minor", "patch"]
