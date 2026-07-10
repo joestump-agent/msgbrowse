@@ -12,7 +12,8 @@
        and its aria-expanded in sync (#175's lg+ collapse retired in #190);
        shell.js keeps the header tabs' active state correct across boosted
        swaps and forwards inner-container scrolls to htmx's `revealed`
-       checker (#190); copy.js powers the Settings page's copy buttons;
+       checker (#190); copy.js powers the copy buttons on Settings and the
+       link tiles in transcripts / Media→Links (#14);
        setup.js powers the Setup permission-guidance modals (focus trap,
        Escape, restore focus, recheck aria-live) — all via document-level
        delegation (CSP-safe, no inline handlers). */}}
@@ -169,6 +170,14 @@
     </aside>
   </div>
 </div>
+{{/* Shared copy-confirmation live region (issue #14): copy.js announces every
+     successful copy here for assistive tech (SPEC-0010 §Accessibility "Dynamic
+     feedback"). It lives in the persistent shell — not inside #main-content —
+     so the link-tile copy buttons on the transcript and Media→Links pages
+     announce into it, and it survives boosted swaps without being re-rendered.
+     Settings' own copy buttons reuse this same region (the standalone one it
+     used to carry is gone). */}}
+<p id="copy-announce" class="sr-only" aria-live="polite"></p>
 </body>
 </html>{{end}}
 
@@ -300,8 +309,14 @@
       </div>
       {{- end}}
       {{- if .Links}}
+      {{/* Each link renders as a tile: the accent pill (icon + domain) links out
+           in a new tab, and a sibling icon-only copy button copies the FULL URL
+           (data-copy-value — the pill only shows the domain) via copy.js. The
+           button is a SIBLING of the anchor, not a child, so copying never
+           triggers the pill's click-through-to-open (#14). .link-tile keeps the
+           pair wrapping as one unit inside the flex row. */}}
       <div class="msg-links">
-        {{- range .Links}}<a class="link-pill" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{template "icon-link" $}}<span>{{.Domain}}</span></a>{{end}}
+        {{- range .Links}}<span class="link-tile"><a class="link-pill" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{template "icon-link" $}}<span>{{.Domain}}</span></a><button type="button" class="copy-btn copy-btn-inline" data-copy-value="{{.URL}}" data-copy-announce="Link copied" aria-label="Copy link"><span class="icon-copy">{{template "icon-copy" $}}</span><span class="icon-check">{{template "icon-check" $}}</span></button></span>{{end}}
       </div>
       {{- end}}
       {{- if .Reactions}}

@@ -32,8 +32,9 @@
      QR + manual code, the pair form, and the paired-device registry). Copy
      buttons are wired by /static/copy.js via data-copy-target (no inline
      handlers — script-src 'self'); confirmations are announced through the
-     aria-live region below and shown visually by the button's copy→check icon
-     swap. Every value is also selectable text, so nothing depends on the
+     shared #copy-announce aria-live region in the page shell (page_end, #14)
+     and shown visually by the button's copy→check icon swap. Every value is
+     also selectable text, so nothing depends on the
      clipboard or the QR image alone. Logs and Status & backups render under
      the same shell via the sub-nav above (issue #163). */}}
 {{define "settings_content"}}<title>{{.Title}}</title>
@@ -49,10 +50,8 @@
     {{template "settings_subnav" "settings"}}
     <p class="screen-sub">Connect an MCP client to this archive, or pair another device.</p>
 
-    {{/* Copy confirmations land here for assistive tech (SPEC-0010
-         §Accessibility "Dynamic feedback"): polite live region, visually
-         hidden, updated by copy.js on every successful copy. */}}
-    <p id="copy-announce" class="sr-only" aria-live="polite"></p>
+    {{/* Copy confirmations announce into the shared #copy-announce live region
+         in the page shell (page_end, #14) — no per-page region needed. */}}
 
     <section class="status-card space-y-4" aria-labelledby="settings-mcp-heading">
       <h2 id="settings-mcp-heading" class="status-card-title">MCP server</h2>

@@ -163,7 +163,13 @@
     <ul class="media-list">
       {{- range .Links}}
       <li class="media-list-card">
-        <a class="media-link-url" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{.URL}}</a>
+        {{/* The URL links out; the sibling icon-only copy button copies the same
+             full URL via copy.js (data-copy-value). Sibling, not child, so the
+             copy click never navigates (#14). */}}
+        <div class="media-link-row">
+          <a class="media-link-url" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{.URL}}</a>
+          <button type="button" class="copy-btn copy-btn-inline" data-copy-value="{{.URL}}" data-copy-announce="Link copied" aria-label="Copy link"><span class="icon-copy">{{template "icon-copy" $}}</span><span class="icon-check">{{template "icon-check" $}}</span></button>
+        </div>
         <div class="media-card-meta">
           {{- if gt .Count 1}}<span class="font-mono">×{{num .Count}}</span> · {{end}}
           <a href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
