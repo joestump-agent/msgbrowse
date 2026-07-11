@@ -79,7 +79,7 @@ func TestListAttachments(t *testing.T) {
 	}
 
 	// Conversation filter: only Harper's image.
-	hImages, err := st.ListAttachments(ctx, "image", GalleryFilter{ConversationID: harper}, 0, 0)
+	hImages, err := st.ListAttachments(ctx, "image", GalleryFilter{ConversationIDs: []int64{harper}}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +103,72 @@ func TestListAttachments(t *testing.T) {
 	}
 	if len(none.Items) != 0 {
 		t.Errorf("imessage images = %d, want 0", len(none.Items))
+	}
+}
+
+// TestGalleryMultiConversationFilter: GalleryFilter.ConversationIDs narrows to
+// ANY of the selected conversations (issue #6) across the listing and count
+// paths, and an empty set still means "all".
+func TestGalleryMultiConversationFilter(t *testing.T) {
+	st, harper, group := seedGalleryCorpus(t)
+	ctx := context.Background()
+
+	// A third conversation the two-id filter must exclude.
+	zed, err := st.UpsertConversation(ctx, source.Signal, "Zed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zedMsgs := []signal.Message{
+		msg("Zed", "2022-05-01 10:00:00", "Zed", "pic",
+			[]signal.Attachment{{Kind: signal.KindImage, RelPath: "media/zed.jpg", OriginalName: "zed.jpg"}},
+			[]signal.Link{{URL: "https://zed.example.net/only"}}),
+	}
+	if _, err := st.ReplaceConversationMessages(ctx, zed, source.Signal, zedMsgs); err != nil {
+		t.Fatal(err)
+	}
+
+	both := GalleryFilter{ConversationIDs: []int64{harper, group}}
+
+	// Images from either selected conversation, still newest-first; Zed's
+	// May image is excluded despite being newest overall.
+	images, err := st.ListAttachments(ctx, "image", both, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images.Items) != 2 || images.Items[0].OriginalName != "sunset.png" || images.Items[1].OriginalName != "cabin.jpg" {
+		t.Errorf("multi-conversation images = %+v, want [sunset.png cabin.jpg]", images.Items)
+	}
+
+	// Links: both selected conversations' URLs, Zed's excluded.
+	links, err := st.ListLinks(ctx, both, LinkCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links.Links) != 2 {
+		t.Errorf("multi-conversation links = %d, want 2: %+v", len(links.Links), links.Links)
+	}
+	for _, l := range links.Links {
+		if l.Domain == "zed.example.net" {
+			t.Errorf("multi-conversation links leaked an unselected conversation: %+v", l)
+		}
+	}
+
+	// Counts agree with the listings.
+	counts, err := st.CountMedia(ctx, both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Images != 2 || counts.Files != 1 || counts.Links != 2 {
+		t.Errorf("multi-conversation counts = %+v, want {Images:2 Files:1 Links:2}", counts)
+	}
+
+	// The empty set means all conversations — Zed included now.
+	all, err := st.CountMedia(ctx, GalleryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Images != 3 || all.Links != 3 {
+		t.Errorf("unfiltered counts = %+v, want Images:3 Links:3", all)
 	}
 }
 
@@ -342,7 +408,7 @@ func TestCountMedia(t *testing.T) {
 		t.Errorf("counts = %+v, want {Images:2 Files:1 Links:2}", all)
 	}
 
-	h, err := st.CountMedia(ctx, GalleryFilter{ConversationID: harper})
+	h, err := st.CountMedia(ctx, GalleryFilter{ConversationIDs: []int64{harper}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,14 +473,18 @@ func explainPlan(t *testing.T, st *Store, q string, args ...any) []string {
 // appear only as bounded primary-key SEARCHes for the page's rows, and the
 // attachment walk itself runs on an index (no whole-table sort).
 func TestGalleryQueryPlans(t *testing.T) {
-	st, harper, _ := seedGalleryCorpus(t)
+	st, harper, group := seedGalleryCorpus(t)
 
 	filters := map[string]GalleryFilter{
 		"unfiltered":   {},
-		"conversation": {ConversationID: harper},
-		"source":       {Source: source.Signal},
-		"date":         {StartUnix: 1, EndUnix: 2000000000},
-		"sort-asc":     {SortAsc: true}, // oldest-first must also drive from the index
+		"conversation": {ConversationIDs: []int64{harper}},
+		// The multi-select IN(...) set (issue #6) must stay index-driven: SQLite
+		// runs the IN over idx_attachments_conv_kind's leading column as one
+		// seek per id, never a table scan.
+		"multi-conversation": {ConversationIDs: []int64{harper, group}},
+		"source":             {Source: source.Signal},
+		"date":               {StartUnix: 1, EndUnix: 2000000000},
+		"sort-asc":           {SortAsc: true}, // oldest-first must also drive from the index
 	}
 
 	for name, f := range filters {
