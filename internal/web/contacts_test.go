@@ -12,12 +12,12 @@ import (
 // the fakeEnabler style): it records calls and returns scripted people so
 // seam tests can prove the server hands consumers exactly the wired provider.
 type fakeContactResolver struct {
-	available bool
-	people    []contacts.Person
-	resolves  int32 // atomic: number of Resolve calls
+	avail    contacts.Availability
+	people   []contacts.Person
+	resolves int32 // atomic: number of Resolve calls
 }
 
-func (f *fakeContactResolver) Available(context.Context) bool { return f.available }
+func (f *fakeContactResolver) Availability(context.Context) contacts.Availability { return f.avail }
 
 func (f *fakeContactResolver) Resolve(_ context.Context, id contacts.Identifier) ([]contacts.Person, error) {
 	atomic.AddInt32(&f.resolves, 1)
@@ -52,8 +52,8 @@ func TestContactResolverDefaultsToUnavailable(t *testing.T) {
 	if _, ok := r.(contacts.Unavailable); !ok {
 		t.Fatalf("contactResolver() = %T, want contacts.Unavailable", r)
 	}
-	if r.Available(ctx) {
-		t.Fatal("unwired resolver must report Available() = false")
+	if got := r.Availability(ctx); got != contacts.Absent {
+		t.Fatalf("unwired resolver must report Availability() = Absent, got %v", got)
 	}
 	people, err := r.People(ctx)
 	if err != nil || len(people) != 0 {
@@ -81,15 +81,15 @@ func TestSetContactResolverWiresProvider(t *testing.T) {
 			contacts.Normalize("Alice@Example.com"),
 		},
 	}
-	fake := &fakeContactResolver{available: true, people: []contacts.Person{alice}}
+	fake := &fakeContactResolver{avail: contacts.Available, people: []contacts.Person{alice}}
 	srv.SetContactResolver(fake)
 
 	r := srv.contactResolver()
 	if r != contacts.Resolver(fake) {
 		t.Fatalf("contactResolver() = %T, want the wired fake", r)
 	}
-	if !r.Available(ctx) {
-		t.Fatal("wired resolver must report Available() = true")
+	if got := r.Availability(ctx); got != contacts.Available {
+		t.Fatalf("wired resolver must report Availability() = Available, got %v", got)
 	}
 
 	// A canonical identifier round-trips to the scripted person: the same

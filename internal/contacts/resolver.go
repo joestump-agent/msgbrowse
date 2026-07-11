@@ -16,15 +16,57 @@
 //   - Person.Key is STABLE across calls within one address book (e.g. the
 //     CNContact identifier on macOS), so merge decisions can be recorded
 //     against it and re-checked on a later run.
-//   - Every Identifier a Resolver returns is already canonical (the
-//     Normalize* helpers in this package) — the engine compares values
-//     byte-for-byte and never re-normalizes provider output.
-//   - "No address book" is NEVER an error: Available reports false and the
-//     query methods return empty results with a nil error, so the merge path
-//     degrades to no-op instead of failing (the issue #9 acceptance bar).
+//   - Every Identifier a Resolver returns is already canonical (the Normalize*
+//     helpers in this package), so the engine never re-normalizes provider
+//     output. Equality is a byte comparison for KindEmail and KindHandle.
+//     KindPhone is the ONE documented exception: because NormalizePhone never
+//     guesses a country code, the same subscriber number can be stored national
+//     on one provider and international ("+"-prefixed) on another, so the merge
+//     engine (#11) matches KindPhone across those two shapes by comparing the
+//     trailing subscriber digits — never re-normalizing, only widening the phone
+//     compare. That is the single cross-shape rule; both sides still originate
+//     from these helpers. (normalize.go documents the same rule.)
+//   - "No address book" is NEVER an error: Availability reports Absent (or
+//     NeedsPermission) and the query methods return empty results with a nil
+//     error, so the merge path degrades to no-op instead of failing (the issue
+//     #9 acceptance bar).
 package contacts
 
 import "context"
+
+// Availability is the tri-state readiness of an address book, mirroring the
+// permission model of internal/setup (PermissionOK / PermissionNeeded /
+// PermissionNotApplicable). A boolean cannot distinguish "no provider on this
+// platform" from "provider present but the OS grant is missing", yet the merge
+// settings UI (#12) must render those two states differently — a Not-detected
+// affordance versus a Grant-permission affordance — so the seam reports all
+// three.
+type Availability int
+
+const (
+	// Absent: there is no readable address book on this platform, or none was
+	// wired (Linux, browser mode, the Unavailable default). Nothing to grant.
+	Absent Availability = iota
+	// NeedsPermission: a provider exists but the process cannot read it because
+	// the OS consent grant is missing (e.g. macOS Contacts TCC not granted).
+	// This is the state that drives the "connect your address book" affordance.
+	NeedsPermission
+	// Available: an address book is present and readable right now.
+	Available
+)
+
+// String renders a stable token for logs and tests, matching the setup
+// permission tokens ("needs-permission").
+func (a Availability) String() string {
+	switch a {
+	case Available:
+		return "available"
+	case NeedsPermission:
+		return "needs-permission"
+	default:
+		return "absent"
+	}
+}
 
 // Person is one address-book entry projected to exactly what the merge
 // engine needs: a stable key, a display name, and canonical identifiers. It
@@ -58,21 +100,25 @@ type Person struct {
 // wired Resolver without locking (the SetEnabler/SetPairingSource contract)
 // and the merge engine may query from a background job.
 type Resolver interface {
-	// Available reports whether an address book is present and readable on
-	// this platform right now (e.g. the macOS Contacts permission is
-	// granted). false means Resolve/People will return empty results; it is
-	// the UI's "connect your address book" affordance signal, never an error.
-	Available(ctx context.Context) bool
+	// Availability reports whether an address book is present and readable on
+	// this platform right now: Available when the grant is present, NeedsPermission
+	// when a provider exists but the OS consent grant is missing, Absent when
+	// there is no provider at all. Anything other than Available means
+	// Resolve/People return empty results; it drives the UI's affordance
+	// (Not-detected vs. Grant-permission), never an error.
+	Availability(ctx context.Context) Availability
 	// Resolve returns the address-book people carrying the given canonical
 	// identifier, best match first. The identifier must already be canonical
 	// (Normalize / NormalizePhone / NormalizeEmail); providers match it
-	// against their own canonicalized values. No match is ([]Person{}, nil)
-	// — an error is reserved for a genuinely broken provider (I/O failure),
-	// never for "not found" or "no address book".
+	// against their own canonicalized values. No match is an empty result
+	// (len 0) with a nil error — callers must test len(), not nil, since a nil
+	// slice is equally valid. An error is reserved for a genuinely broken
+	// provider (I/O failure), never for "not found" or "no address book".
 	Resolve(ctx context.Context, id Identifier) ([]Person, error)
 	// People enumerates every address-book person that carries at least one
 	// identifier, for bulk matching passes. An empty address book (or an
-	// unavailable one) is ([]Person{}, nil).
+	// unavailable one) is an empty result (len 0) with a nil error; as with
+	// Resolve, callers must test len(), not nil.
 	People(ctx context.Context) ([]Person, error)
 }
 
@@ -85,8 +131,8 @@ type Unavailable struct{}
 
 var _ Resolver = Unavailable{}
 
-// Available always reports false: there is no address book to read.
-func (Unavailable) Available(context.Context) bool { return false }
+// Availability always reports Absent: there is no address book to read.
+func (Unavailable) Availability(context.Context) Availability { return Absent }
 
 // Resolve always returns no candidates and no error.
 func (Unavailable) Resolve(context.Context, Identifier) ([]Person, error) { return nil, nil }

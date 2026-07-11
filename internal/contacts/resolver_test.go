@@ -13,8 +13,8 @@ func TestUnavailable(t *testing.T) {
 	ctx := context.Background()
 	var r Resolver = Unavailable{}
 
-	if r.Available(ctx) {
-		t.Fatal("Unavailable.Available() = true, want false")
+	if got := r.Availability(ctx); got != Absent {
+		t.Fatalf("Unavailable.Availability() = %v, want Absent", got)
 	}
 
 	people, err := r.People(ctx)

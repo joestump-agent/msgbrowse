@@ -9,12 +9,18 @@
 // cannot be prefixed with a country code without guessing, and a wrong guess
 // silently merges different people. So the canonical form preserves exactly
 // what the input asserted — "+" + digits when an international prefix was
-// present, bare digits otherwise — and the merge engine decides how boldly
-// to match across the two shapes. (A decision the contact-merge ADR/spec
-// should ratify.)
+// present, bare digits otherwise. Those two shapes are byte-unequal, so the
+// merge engine (#11) reconciles them with the ONE documented cross-shape rule:
+// for KindPhone it compares the trailing subscriber digits (a national number
+// is a suffix of its international form), never re-normalizing. Every other
+// Kind matches byte-for-byte. (resolver.go's Resolver contract documents the
+// same rule; the two package docs agree.)
 package contacts
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Kind classifies an identifier for matching: providers and the merge engine
 // only compare values of the same Kind.
@@ -101,11 +107,13 @@ func NormalizePhone(raw string) (string, bool) {
 // case-insensitively too, because every real-world provider folds it and a
 // case-sensitive miss would silently split one person in two — the worse
 // failure for merging). ok is false when the input is not email-shaped:
-// not exactly one "@", an empty local part or domain, embedded whitespace,
-// or a dotless domain.
+// not exactly one "@", an empty local part or domain, embedded whitespace
+// (any Unicode space, including the NBSP the phone path also rejects), a
+// dotless domain, or a domain with an empty label (leading/trailing/consecutive
+// dots).
 func NormalizeEmail(raw string) (string, bool) {
 	s := strings.ToLower(strings.TrimSpace(raw))
-	if s == "" || strings.ContainsAny(s, " \t\n\r") {
+	if s == "" || strings.IndexFunc(s, unicode.IsSpace) >= 0 {
 		return "", false
 	}
 	at := strings.IndexByte(s, '@')
@@ -114,7 +122,8 @@ func NormalizeEmail(raw string) (string, bool) {
 	}
 	local, domain := s[:at], s[at+1:]
 	if local == "" || domain == "" || !strings.Contains(domain, ".") ||
-		strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") ||
+		strings.Contains(domain, "..") {
 		return "", false
 	}
 	return s, true

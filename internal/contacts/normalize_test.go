@@ -68,7 +68,10 @@ func TestNormalizeEmail(t *testing.T) {
 		{"dotless domain", "alice@localhost", "", false},
 		{"leading dot domain", "alice@.example.com", "", false},
 		{"trailing dot domain", "alice@example.com.", "", false},
+		{"consecutive dots domain", "a@b..com", "", false},
+		{"consecutive dots deeper", "a@b.c..d", "", false},
 		{"embedded space", "a lice@example.com", "", false},
+		{"embedded nbsp", "user name@example.com", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
