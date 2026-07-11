@@ -107,6 +107,14 @@ func Run(ctx context.Context, st *store.Store, opts Options) (store.IngestRun, e
 	if _, err := st.RecordIngestRun(ctx, run); err != nil {
 		return run, err
 	}
+	// Fold re-imported identities back onto their merged person (ADR-0022 /
+	// SPEC-0015). Idempotent, local-only; nil resolver = no address book.
+	// Best-effort: the import is committed and hash-idempotent, and reconcile
+	// re-runs next import, so a failure is logged rather than failing the import.
+	if err := st.ReconcileContacts(ctx, nil); err != nil {
+		log.Error("contact reconcile failed (import committed; will retry next run)", "error", err)
+		run.Errors++
+	}
 	log.Info("whatsapp import complete",
 		"scanned", run.ConversationsScanned, "changed", run.ConversationsChanged,
 		"messages_added", run.MessagesAdded, "skipped_entries", run.SkippedLines,

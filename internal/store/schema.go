@@ -6,7 +6,7 @@ import "context"
 // `user_version` pragma. On Open, the migrations runner brings any older
 // database forward to this version. Bump it and append a migration whenever the
 // schema changes.
-const schemaVersion = 11
+const schemaVersion = 12
 
 // SchemaVersion returns the schema revision this binary expects (and migrates a
 // database forward to on Open). Read-only callers — notably `msgbrowse doctor` —
@@ -50,6 +50,7 @@ var migrations = []string{
 	9:  schemaV9,
 	10: schemaV10,
 	11: schemaV11,
+	12: schemaV12,
 }
 
 // schemaV1 is the initial Signal-only schema. It is preserved verbatim so a
@@ -504,4 +505,66 @@ CREATE TABLE IF NOT EXISTS embed_runs (
     batches     INTEGER NOT NULL DEFAULT 0,
     error       TEXT    NOT NULL DEFAULT ''
 );
+`
+
+// schemaV12 adds the cross-provider contact-merge decision journal and its
+// rules (ADR-0022 / SPEC-0015, issue #11). Note the version: ADR-0022 wrote
+// "migration v11", but embed_runs (issue #1) claimed v11 first, so the merge
+// tables land at v12 — the tables and behavior are exactly as the ADR pins,
+// only the migration number moved.
+//
+// contact_links is a DECISION JOURNAL, not a pointer graph: one row per
+// merge/split decision keyed by a canonical-ordered pair of stable
+// (source, identifier) tuples — never contact rowids. This is the codebase's
+// standard answer to rowid churn (embeddings v3, contact_facts v4, reactions
+// v6 all key durable state by stable message hashes because
+// ReplaceConversationMessages / DeleteSourceData reassign rowids on every
+// import): (source, identifier) is UNIQUE and stable in contact_identifiers
+// since v2, so a decision recorded against it re-activates when its source is
+// re-imported. There is deliberately NO foreign key to contact_identifiers —
+// a link whose identifier is currently absent is INERT, not invalid, exactly
+// like a fact whose supporting message hash has vanished.
+//
+// Canonical pair ordering ((source_a, identifier_a) < (source_b,
+// identifier_b), enforced by the writer, deduped by the UNIQUE constraint)
+// makes symmetric decisions collide, and "one current decision per pair" (the
+// writer replaces a split row with a merge row and vice versa on manual
+// action) keeps the table free of contradictions without timestamp
+// arbitration. A merge records the full bipartite pairing of both contacts'
+// identifier sets so any surviving pair re-links the group after a partial
+// source deletion. origin ('manual' | 'auto') drives precedence in reconcile:
+// manual split > manual merge > auto rules.
+//
+// contact_merge_rules is a single-row settings table (CHECK id = 1) owned by
+// the settings UI (#12); it lives in the store, not the config file, because
+// the web layer has no config-file write path. Defaults are conservative
+// (ADR-0022): auto-merge OFF (suggestions only), phone+email trusted once
+// enabled, address-book hints on (they only ever suggest, and the provider is
+// permission-gated). The default row is seeded here idempotently.
+const schemaV12 = `
+CREATE TABLE IF NOT EXISTS contact_links (
+    id           INTEGER PRIMARY KEY,
+    kind         TEXT    NOT NULL,          -- 'merge' | 'split'
+    origin       TEXT    NOT NULL,          -- 'manual' | 'auto'
+    source_a     TEXT    NOT NULL,
+    identifier_a TEXT    NOT NULL,
+    source_b     TEXT    NOT NULL,
+    identifier_b TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL,
+    UNIQUE(source_a, identifier_a, source_b, identifier_b)
+);
+CREATE INDEX IF NOT EXISTS idx_contact_links_a ON contact_links(source_a, identifier_a);
+CREATE INDEX IF NOT EXISTS idx_contact_links_b ON contact_links(source_b, identifier_b);
+
+CREATE TABLE IF NOT EXISTS contact_merge_rules (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    auto_merge       INTEGER NOT NULL DEFAULT 0,
+    match_phone      INTEGER NOT NULL DEFAULT 1,
+    match_email      INTEGER NOT NULL DEFAULT 1,
+    use_address_book INTEGER NOT NULL DEFAULT 1,
+    updated_at       TEXT    NOT NULL
+);
+INSERT INTO contact_merge_rules (id, auto_merge, match_phone, match_email, use_address_book, updated_at)
+    VALUES (1, 0, 1, 1, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    ON CONFLICT(id) DO NOTHING;
 `
