@@ -117,6 +117,11 @@ func Run(ctx context.Context, st *store.Store, opts Options) (store.IngestRun, e
 	if _, err := st.RecordIngestRun(ctx, run); err != nil {
 		return run, err
 	}
+	// Fold re-imported identities back onto their merged person (ADR-0022 /
+	// SPEC-0015). Idempotent, local-only; nil resolver = no address book.
+	if err := st.ReconcileContacts(ctx, nil); err != nil {
+		return run, err
+	}
 	log.Info("imessage import complete",
 		"scanned", run.ConversationsScanned, "changed", run.ConversationsChanged,
 		"messages_added", run.MessagesAdded, "skipped_lines", run.SkippedLines,
