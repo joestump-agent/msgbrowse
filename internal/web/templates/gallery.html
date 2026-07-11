@@ -16,20 +16,28 @@
     <h1 class="screen-h1 mb-1">Media</h1>
     <p class="screen-sub mb-5">Images, files, and links across your archive.</p>
 
-    <form class="filter-row mb-4" action="/gallery" method="get">
+    <form class="filter-row filter-row-media mb-4" action="/gallery" method="get">
       <input type="hidden" name="tab" value="{{.Filter.Tab}}">
-      <label class="filter-control">
-        <span class="filter-label">Conversation</span>
-        {{/* FilterConversations is the lightweight id+name listing — NOT the
-             sidebar summaries — so partial renders never pay for the full
-             listing (REQ-0008-006). */}}
-        <select name="conversation" class="filter-input">
-          <option value="">All conversations</option>
-          {{- range .FilterConversations}}
-          <option value="{{.ID}}" {{if eq .ID $.Filter.ConversationID}}selected{{end}}>{{humanName .Name}}</option>
-          {{- end}}
-        </select>
-      </label>
+      <div class="filter-control filter-control-conv">
+        <span class="filter-label" id="conv-filter-label">Conversation</span>
+        {{/* Multi-select conversation filter (issue #6): a CSS-only
+             <details> dropdown of checkboxes — no inline JS (CSP script-src
+             'self'), keyboard-operable natively (Enter/Space toggles the
+             summary, Tab walks the checkboxes). Every checked box submits a
+             repeated ?conversation= param; none checked means all. The
+             summary caps + ellipsizes so long names never widen the bar
+             (issue #7). FilterConversations is the lightweight id+name
+             listing — NOT the sidebar summaries — so partial renders never
+             pay for the full listing (REQ-0008-006). */}}
+        <details class="filter-multi">
+          <summary class="filter-input filter-multi-summary" aria-labelledby="conv-filter-label"><span class="filter-multi-value">{{.ConversationFilterLabel}}</span></summary>
+          <ul class="filter-multi-panel">
+            {{- range .FilterConversations}}
+            <li><label class="filter-multi-option"><input type="checkbox" name="conversation" value="{{.ID}}"{{if $.Filter.HasConversation .ID}} checked{{end}}><span class="filter-multi-name">{{humanName .Name}}</span></label></li>
+            {{- end}}
+          </ul>
+        </details>
+      </div>
       <label class="filter-control">
         <span class="filter-label">Source</span>
         <select name="source" class="filter-input">
@@ -44,7 +52,9 @@
       {{/* Sort steers the Images/Files walk (Links stay domain-grouped); the
            value round-trips through parseGalleryFilter and rides tab + load-more
            URLs so infinite scroll keeps the order. Hidden on the Links tab where
-           it is inert, so a stale selection can't read as a broken Apply. */}}
+           it is inert, so a stale selection can't read as a broken Apply — but a
+           hidden input still carries a non-default choice, so Apply from Links
+           doesn't silently drop it (PR #16 review nit). */}}
       {{if ne .Filter.Tab "links"}}
       <label class="filter-control">
         <span class="filter-label">Sort</span>
@@ -53,7 +63,7 @@
           <option value="asc" {{if eq .Filter.Sort "asc"}}selected{{end}}>Oldest first</option>
         </select>
       </label>
-      {{end}}
+      {{else}}{{if eq .Filter.Sort "asc"}}<input type="hidden" name="sort" value="asc">{{end}}{{end}}
       <button type="submit" class="btn-search">Apply</button>
     </form>
 

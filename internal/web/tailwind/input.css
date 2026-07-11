@@ -1281,6 +1281,103 @@ a.meta-chip:hover {
   outline: none;
   border-color: color-mix(in oklab, var(--color-primary) 55%, var(--color-neutral));
 }
+/* Multi-select conversation filter (issues #6/#7): a CSS-only <details>
+   dropdown of checkboxes. The summary is styled as a capped-width filter
+   input whose text ellipsizes — long conversation names never widen the
+   filter bar — and the panel overlays the content below (absolute, so
+   opening it never reflows the bar). */
+.filter-control-conv {
+  min-width: 0;
+}
+.filter-multi {
+  position: relative;
+}
+.filter-multi-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 13rem;
+  max-width: 100%;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.filter-multi-summary::-webkit-details-marker {
+  display: none;
+}
+.filter-multi-summary::after {
+  content: "";
+  flex: none;
+  margin-left: auto;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid color-mix(in oklab, var(--color-base-content) 55%, transparent);
+}
+.filter-multi[open] > .filter-multi-summary,
+.filter-multi-summary:focus-visible {
+  outline: none;
+  border-color: color-mix(in oklab, var(--color-primary) 55%, var(--color-neutral));
+}
+.filter-multi-value {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.filter-multi-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: 17rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  border: 1px solid var(--color-neutral);
+  border-radius: 0.5rem;
+  background: var(--color-base-100);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+.filter-multi-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: 0.375rem;
+  font-size: 13px;
+  cursor: pointer;
+}
+.filter-multi-option:hover {
+  background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+}
+.filter-multi-option input {
+  flex: none;
+  accent-color: var(--color-primary);
+}
+.filter-multi-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Issue #7: at desktop widths the Media filter bar sits on one line — the
+   capped conversation control shrinks first if space runs short. Narrower
+   viewports fall back to the default wrap. Scoped to the Media bar
+   (.filter-row-media); the Search page's busier bar keeps wrapping. */
+@media (min-width: 1024px) {
+  .filter-row-media {
+    flex-wrap: nowrap;
+  }
+  .filter-row-media .filter-control-conv {
+    flex: 0 1 13rem;
+  }
+  .filter-row-media .filter-multi-summary {
+    width: 100%;
+  }
+}
 /* Toggle chip (Has attachment / Has link). The hidden checkbox drives the
    active fill via :checked + the adjacent label. */
 .toggle-chip {
