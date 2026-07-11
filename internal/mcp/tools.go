@@ -298,7 +298,10 @@ func (s *Server) listMedia(ctx context.Context, _ *mcpsdk.CallToolRequest, in li
 	if err != nil {
 		return nil, listMediaOut{}, err
 	}
-	filter := store.GalleryFilter{ConversationID: convID, Source: in.Source, Limit: in.Limit}
+	filter := store.GalleryFilter{Source: in.Source, Limit: in.Limit}
+	if convID > 0 {
+		filter.ConversationIDs = []int64{convID}
+	}
 	var kinds []string
 	switch in.Kind {
 	case "image", "file":
@@ -358,10 +361,12 @@ func (s *Server) listLinks(ctx context.Context, _ *mcpsdk.CallToolRequest, in li
 		limit = 200
 	}
 	filter := store.GalleryFilter{
-		ConversationID: convID,
-		Source:         in.Source,
-		Domain:         strings.ToLower(strings.TrimPrefix(in.Domain, "www.")),
-		Limit:          limit,
+		Source: in.Source,
+		Domain: strings.ToLower(strings.TrimPrefix(in.Domain, "www.")),
+		Limit:  limit,
+	}
+	if convID > 0 {
+		filter.ConversationIDs = []int64{convID}
 	}
 	page, err := s.store.ListLinks(ctx, filter, store.LinkCursor{})
 	if err != nil {
