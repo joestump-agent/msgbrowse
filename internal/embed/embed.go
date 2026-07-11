@@ -43,6 +43,14 @@ type Summary struct {
 // batches, until none remain. It returns a summary. Individual batch failures
 // abort the run (the next run resumes where this one stopped, since stored
 // embeddings persist).
+//
+// Each run is also recorded in the store's embed_runs table (issue #1):
+// a row at start, a per-batch progress heartbeat, and a terminal write with
+// the totals (or the abort error). That log is how the web Overview shows
+// "last index run" and a live in-progress marker — this CLI and `msgbrowse
+// serve` are separate processes sharing one SQLite file. Recording is
+// best-effort bookkeeping: a failed recording write logs a warning and never
+// aborts the embedding work itself.
 func Run(ctx context.Context, st *store.Store, client llm.Client, opts Options) (Summary, error) {
 	log := opts.Logger
 	if log == nil {
@@ -56,11 +64,44 @@ func Run(ctx context.Context, st *store.Store, client llm.Client, opts Options) 
 	if model == "" {
 		return Summary{}, fmt.Errorf("embed: model not configured (set llm.embed_model)")
 	}
+
+	start := time.Now()
+	runID, err := st.BeginEmbedRun(ctx, model, start)
+	if err != nil {
+		log.Warn("could not record embed run start", "error", err)
+		runID = 0
+	}
+	sum, err := run(ctx, st, client, opts, model, runID, start, log)
+	if runID != 0 {
+		errText := ""
+		if err != nil {
+			errText = err.Error()
+		}
+		// The terminal write must land even when the run was aborted by ctx
+		// cancellation — otherwise every Ctrl-C reads as a crashed run forever.
+		if ferr := st.FinishEmbedRun(context.WithoutCancel(ctx), store.EmbedRun{
+			ID:         runID,
+			FinishedAt: time.Now(),
+			DurationMS: time.Since(start).Milliseconds(),
+			Embedded:   sum.Embedded,
+			Pruned:     sum.Pruned,
+			Batches:    sum.Batches,
+			Error:      errText,
+		}); ferr != nil {
+			log.Warn("could not record embed run finish", "error", ferr)
+		}
+	}
+	return sum, err
+}
+
+// run is the embedding loop behind Run, separated so the caller can wrap it
+// with the begin/finish run-recording writes. runID 0 disables the per-batch
+// progress heartbeat (recording could not start).
+func run(ctx context.Context, st *store.Store, client llm.Client, opts Options, model string, runID int64, start time.Time, log *slog.Logger) (Summary, error) {
 	batch := opts.BatchSize
 	if batch <= 0 || batch > 512 {
 		batch = 64
 	}
-	start := time.Now()
 	var sum Summary
 
 	if opts.Prune {
@@ -125,6 +166,13 @@ func Run(ctx context.Context, st *store.Store, client llm.Client, opts Options) 
 		}
 		sum.Embedded += len(targets)
 		sum.Batches++
+		if runID != 0 {
+			// The heartbeat readers use to distinguish a live run from a crashed
+			// one; best-effort like the rest of the recording.
+			if uerr := st.UpdateEmbedRunProgress(ctx, runID, sum.Embedded, sum.Batches, time.Now()); uerr != nil {
+				log.Warn("could not record embed run progress", "error", uerr)
+			}
+		}
 		log.Debug("embedded batch", "batch", sum.Batches, "embedded", sum.Embedded, "of", total)
 	}
 

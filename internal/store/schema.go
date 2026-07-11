@@ -6,7 +6,7 @@ import "context"
 // `user_version` pragma. On Open, the migrations runner brings any older
 // database forward to this version. Bump it and append a migration whenever the
 // schema changes.
-const schemaVersion = 10
+const schemaVersion = 11
 
 // SchemaVersion returns the schema revision this binary expects (and migrates a
 // database forward to on Open). Read-only callers — notably `msgbrowse doctor` —
@@ -49,6 +49,7 @@ var migrations = []string{
 	8:  schemaV8,
 	9:  schemaV9,
 	10: schemaV10,
+	11: schemaV11,
 }
 
 // schemaV1 is the initial Signal-only schema. It is preserved verbatim so a
@@ -470,5 +471,37 @@ CREATE TABLE sync_state (
     source         TEXT    NOT NULL,
     last_import_at TEXT    NOT NULL DEFAULT '',
     updated_at     TEXT    NOT NULL
+);
+`
+
+// schemaV11 adds embed_runs — the durable log of semantic-search indexing
+// runs, the embeddings analogue of ingest_runs (issue #1: the Overview needs
+// "last index run" and an in-progress marker, and internal/embed's
+// run-time Summary evaporates with the CLI process that produced it).
+//
+// A run is recorded in two (plus N) writes: a row is INSERTed when the run
+// starts (finished_at = ” — the sentinel for "still in flight"), its
+// embedded/batches counters and updated_at heartbeat are refreshed after each
+// batch, and the terminal write stamps finished_at plus the final totals (and
+// the error text when the run aborted). `msgbrowse embed` is a separate
+// process from `msgbrowse serve`, but both open the same SQLite file, so the
+// heartbeat is exactly how the web Overview observes a live run: an
+// unfinished row with a fresh updated_at is in progress; an unfinished row
+// whose heartbeat went stale is a crashed run (the process died before its
+// terminal write) and is reported as such rather than spinning forever.
+//
+// All timestamps are RFC3339 UTC strings, matching ingest_runs.
+const schemaV11 = `
+CREATE TABLE IF NOT EXISTS embed_runs (
+    id          INTEGER PRIMARY KEY,
+    model       TEXT    NOT NULL,
+    started_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    finished_at TEXT    NOT NULL DEFAULT '',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    embedded    INTEGER NOT NULL DEFAULT 0,
+    pruned      INTEGER NOT NULL DEFAULT 0,
+    batches     INTEGER NOT NULL DEFAULT 0,
+    error       TEXT    NOT NULL DEFAULT ''
 );
 `
