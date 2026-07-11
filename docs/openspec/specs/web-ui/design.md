@@ -15,7 +15,8 @@ internal/cli/serve.go ──▶ web.NewServer(store, cfg, log)
     GET /c/{id}          handleConversation   │  transcript + infinite scroll
     GET /c/{id}/messages handleMessages       │  keyset next-page partial
     GET /c/{id}/at/{mid} handleConversationAt  │  jump-to-context (ownership check)
-    GET /status          handleStatus         │  freshness + ingest + snapshots
+    GET /status          handleStatus         │  freshness + ingest
+    GET /backups         handleBackups        │  encrypted DB snapshot inventory
     GET /media/{id}/...  handleMedia          ─┘  source-aware, traversal-safe
     GET /static/...      embedded assets (htmx, theme.js, app.css)
 ```

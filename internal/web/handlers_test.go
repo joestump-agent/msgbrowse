@@ -424,16 +424,18 @@ func TestStatusPage(t *testing.T) {
 		t.Fatalf("status page = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"daily", "monthly", "yearly", "never opens or decrypts"} {
-		if !contains(body, want) {
-			t.Errorf("status page missing %q", want)
-		}
-	}
-	// Slate re-skin (REQ-0006-011): slate surfaces, the freshness stat strip, the
-	// ingest-run metric grid, the snapshot table, and tier pills.
-	for _, want := range []string{"status-card", "stat-strip", "status-grid", "status-table", "tier-pill"} {
+	// Slate re-skin (REQ-0006-011): slate surfaces, the freshness stat strip,
+	// and the ingest-run metric grid. The snapshot inventory moved to the
+	// Backups tab (#2), so its table/pills no longer render here.
+	for _, want := range []string{"status-card", "stat-strip", "status-grid"} {
 		if !contains(body, want) {
 			t.Errorf("status page missing slate marker %q", want)
+		}
+	}
+	// The snapshot surface is gone from Status — it lives on /backups now.
+	for _, absent := range []string{"Encrypted DB snapshots", "tier-pill", "never opens or decrypts"} {
+		if contains(body, absent) {
+			t.Errorf("status page still carries the snapshot marker %q (moved to /backups in #2)", absent)
 		}
 	}
 }

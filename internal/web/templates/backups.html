@@ -1,0 +1,53 @@
+{{define "backups"}}{{template "page_start" .}}{{template "backups_content" .}}{{template "page_end" .}}{{end}}
+
+{{/* backups_content is the boosted-swap unit (SPEC-0008 REQ-0008-006): <title>
+     keeps history entries titled; the define owns <main id="main-content"> so
+     partial responses carry no shell.
+
+     The Backups tab (issue #2): the encrypted-DB-snapshots inventory, moved out
+     of /status into its own Settings-shell section. Renders ONLY the snapshot
+     story — total footprint, count, and the per-snapshot table — inside the
+     shared Settings shell (h1 + sub-nav), with /backups its canonical URL. */}}
+{{define "backups_content"}}<title>{{.Title}}</title>
+    <main id="main-content" class="flex-1" tabindex="0">
+  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
+    <h1 class="screen-h1">Settings</h1>
+    {{template "settings_subnav" "backups"}}
+
+    {{/* The snapshots card renders only where a snapshot pipeline exists
+         (issue #164): recorded snapshots, or a .snapshots dir in the signal
+         archive. A desktop-onboarded machine has neither — "0 B across 0
+         snapshots … No snapshots found" read like a failure there, so it gets
+         one neutral line instead of the card. */}}
+    {{if .HasSnapshotPipeline}}
+    <div class="status-card">
+      <div class="status-card-title">Encrypted DB snapshots</div>
+      <p class="status-note mb-4">Total footprint: <span class="font-mono">{{humanSize .SnapshotFootprint}}</span> across <span class="font-mono">{{num (len .Snapshots)}}</span> snapshots.
+        These are SQLCipher-encrypted raw database backups for disaster recovery —
+        msgbrowse lists them but never opens or decrypts them.</p>
+      {{if .Snapshots}}
+      <div class="overflow-x-auto">
+        <table class="status-table">
+          <thead><tr><th>Snapshot</th><th>Taken</th><th>Size</th><th>Retention tier</th></tr></thead>
+          <tbody>
+            {{- range .Snapshots}}
+            <tr>
+              <td class="mono">{{.Filename}}</td>
+              <td class="whitespace-nowrap">{{.TakenAt.Format "2006-01-02 15:04"}}</td>
+              <td class="whitespace-nowrap mono">{{humanSize .SizeBytes}}</td>
+              <td><span class="tier-pill tier-{{.Tier}}">{{.Tier}}</span></td>
+            </tr>
+            {{- end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <p class="results-empty">No snapshots found under <code class="font-mono">.snapshots/</code>.</p>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="status-note">No snapshot pipeline on this machine.</p>
+    {{end}}
+  </div>
+    </main>
+{{end}}

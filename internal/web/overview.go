@@ -9,8 +9,8 @@
 // Deliberate non-changes: /status and /settings stay the canonical URLs (the
 // settings_subnav contract from #163 — "nothing redirects" — is preserved;
 // the Overview duplicates, it does not replace), device pairing stays on
-// Settings, and snapshots stay on /status until they graduate to their own
-// Backups tab (tracked separately).
+// Settings, and snapshots live on their own /backups tab (issue #2) — the
+// Overview surfaces neither.
 package web
 
 import (
