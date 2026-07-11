@@ -68,6 +68,13 @@ type Store interface {
 	DeleteSourceData(ctx context.Context, src string) (int64, error)
 	LatestEmbedRun(ctx context.Context) (*store.EmbedRun, error)
 	EmbeddingCoverage(ctx context.Context, model string) (store.EmbeddingCoverage, error)
+	// Contact merge engine (#11) behind the Settings → Contacts tab (#12).
+	GetMergeRules(ctx context.Context) (store.MergeRules, error)
+	SetMergeRules(ctx context.Context, r store.MergeRules) error
+	MergeCandidates(ctx context.Context, resolver contacts.Resolver) ([]store.MergeCandidate, error)
+	MergedContacts(ctx context.Context) ([]store.MergedContact, error)
+	MergeContacts(ctx context.Context, a, b int64) (int64, error)
+	SplitContact(ctx context.Context, contactID int64, moved []store.ContactIdentifier) (int64, error)
 }
 
 // Server holds the dependencies shared by all handlers.
@@ -389,6 +396,15 @@ func (s *Server) routes() http.Handler {
 	// as every other privileged POST.
 	mux.HandleFunc("GET /settings/llm", s.handleSettingsLLM)
 	mux.HandleFunc("POST /settings/llm", s.handleSettingsLLMSave)
+	// The Settings → Contacts tab (#12): the merge-rules settings, de-dup
+	// candidate review, and the manual merge/split overrides. A safe GET render
+	// plus three privileged POSTs (save rules / merge / split), each gated by
+	// the same checkSetupPOST contract and re-rendering the tab with a
+	// fixed-enum result banner.
+	mux.HandleFunc("GET /settings/contacts", s.handleSettingsContacts)
+	mux.HandleFunc("POST /settings/contacts/rules", s.handleSettingsMergeRules)
+	mux.HandleFunc("POST /settings/contacts/merge", s.handleSettingsMerge)
+	mux.HandleFunc("POST /settings/contacts/split", s.handleSettingsSplit)
 	// Device pairing + unpairing (SPEC-0014 Authentication table): privileged
 	// POSTs behind the same checkSetupPOST gate as the Setup POSTs (#157/#158).
 	mux.HandleFunc("POST /settings/devices/pair", s.handleDevicePair)

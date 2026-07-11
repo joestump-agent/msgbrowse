@@ -1,0 +1,193 @@
+{{define "contactsettings"}}{{template "page_start" .}}{{template "contactsettings_content" .}}{{template "page_end" .}}{{end}}
+
+{{/* contactsettings_content is the boosted-swap unit (SPEC-0008 REQ-0008-006,
+     the *_content pattern): <title> keeps history entries titled; the define
+     owns <main id="main-content"> so partial responses carry no shell.
+
+     The Settings → Contacts tab (issue #12): the cross-provider merge engine's
+     user surface. Three cards — the merge RULES form, the de-dup CANDIDATE
+     review with one-click Merge, and the merged-contact SPLIT overrides — each
+     a plain same-origin form POST through the privileged-POST gate (hidden
+     setup_token + same-origin check, the Setup POSTs' contract). No inline JS
+     (CSP script-src 'self'); the forms are hx-boost'd so a POST swaps only
+     #main-content and degrades to a full-document POST without JS. All feedback
+     is fixed-enum banners; echoed names/identifiers pass through html/template
+     escaping like all content. */}}
+{{define "contactsettings_content"}}<title>{{.Title}}</title>
+    {{/* hx-history="false": the forms carry a live per-session setup token (the
+         privileged-POST gate), which must not be snapshotted into htmx's
+         localStorage history cache — the same opt-out the LLM and pairing tabs
+         use. */}}
+    <main id="main-content" class="flex-1" tabindex="0" hx-history="false">
+  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
+    <h1 class="screen-h1">Settings</h1>
+    {{template "settings_subnav" "contacts"}}
+    <p class="screen-sub">How msgbrowse unifies the same person across Signal, iMessage, and WhatsApp —
+      the matching rules, the suggested merges, and manual fixes. Everything stays on this machine.</p>
+
+    {{- if eq .RulesResult "ok"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Merge rules saved.</p>
+      <p class="link-card-sub">The suggestions below reflect the new rules. Auto-merge, when on, is applied
+        on the next import.</p>
+    </div>
+    {{- else if eq .RulesResult "error"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Saving the rules failed.</p>
+      <p class="link-card-sub">The running rules are unchanged. See Logs for details and try again.</p>
+    </div>
+    {{- end}}
+    {{- if eq .MergeResult "ok"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Contacts merged.</p>
+      <p class="link-card-sub">They are now one person across every source. This is durable — it survives
+        re-importing an archive.</p>
+    </div>
+    {{- else if eq .MergeResult "same"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Nothing to merge.</p>
+      <p class="link-card-sub">Those two entries are already the same contact.</p>
+    </div>
+    {{- else if eq .MergeResult "invalid"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">That merge could not be read.</p>
+      <p class="link-card-sub">Reload the tab and try the Merge control again.</p>
+    </div>
+    {{- else if eq .MergeResult "error"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">The merge did not complete.</p>
+      <p class="link-card-sub">Nothing was changed. See Logs for details and try again.</p>
+    </div>
+    {{- end}}
+    {{- if eq .SplitResult "ok"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Contact split.</p>
+      <p class="link-card-sub">The chosen identifiers are now a separate person, and this split is durable —
+        auto-match and any stored merge will keep them apart across re-imports.</p>
+    </div>
+    {{- else if eq .SplitResult "invalid"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Nothing was split.</p>
+      <p class="link-card-sub">Select at least one identifier to move — but not every one — and try again.</p>
+    </div>
+    {{- else if eq .SplitResult "error"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">The split did not complete.</p>
+      <p class="link-card-sub">At least one identifier must stay behind. Nothing was changed — see Logs
+        for details.</p>
+    </div>
+    {{- end}}
+
+    {{/* Merge RULES. Toggle chips over checkboxes (the search filters' pattern),
+         a plain form POST through the gate. */}}
+    <section class="status-card space-y-4" aria-labelledby="contacts-rules-heading">
+      <h2 id="contacts-rules-heading" class="status-card-title">Matching rules</h2>
+      <p class="status-note">Which identifiers count as "the same person", and whether msgbrowse merges
+        automatically or only ever suggests. The conservative default is suggest-only.</p>
+
+      <form method="post" action="/settings/contacts/rules" class="space-y-4"
+            hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML">
+        <input type="hidden" name="setup_token" value="{{.SetupToken}}">
+
+        <div class="flex flex-wrap gap-2">
+          <label class="toggle-chip"><input type="checkbox" name="match_phone" value="1" {{if .Rules.MatchPhone}}checked{{end}}> Match phone numbers</label>
+          <label class="toggle-chip"><input type="checkbox" name="match_email" value="1" {{if .Rules.MatchEmail}}checked{{end}}> Match email addresses</label>
+          {{/* The address-book hint toggle mirrors the resolver's tri-state
+               (issue #9 seam): live only when a readable address book is
+               present, disabled with the matching absent/needs-permission note
+               otherwise. The stored preference is preserved across a disabled
+               save (the handler never reads a disabled control). */}}
+          <label class="toggle-chip"{{if not .AddressBookAvailable}} aria-disabled="true"{{end}}>
+            <input type="checkbox" name="use_address_book" value="1" {{if .Rules.UseAddressBook}}checked{{end}}{{if not .AddressBookAvailable}} disabled{{end}}> Use this Mac's address book as a hint
+          </label>
+        </div>
+        {{- if eq .AddressBookState "needs-permission"}}
+        <p class="setup-note setup-note-warn">msgbrowse cannot read your address book yet.
+          To use it as a hint, grant Contacts access to this app in System Settings › Privacy &amp; Security ›
+          Contacts, then reopen this tab. Address-book matches only ever suggest; they never merge on their own.</p>
+        {{- else if eq .AddressBookState "absent"}}
+        <p class="status-note">No address book is available on this machine, so the hint option is off.
+          It appears on macOS once msgbrowse can read your Contacts.</p>
+        {{- end}}
+
+        <div class="flex flex-wrap gap-2">
+          <label class="toggle-chip"><input type="checkbox" name="auto_merge" value="1" {{if .Rules.AutoMerge}}checked{{end}}> Merge matches automatically</label>
+        </div>
+        <p class="status-note">With automatic merging off (the default), msgbrowse only ever
+          <em>suggests</em> the merges below and waits for you. Turning it on merges exact phone/email
+          matches on the trusted kinds during each import; the address book still only ever suggests.</p>
+
+        <button type="submit" class="setup-btn">Save rules</button>
+      </form>
+    </section>
+
+    {{/* CANDIDATE review: the suggested cross-source merges under the current
+         rules, each with a one-click Merge (a form POST carrying the two ids). */}}
+    <section class="status-card space-y-4" aria-labelledby="contacts-candidates-heading">
+      <h2 id="contacts-candidates-heading" class="status-card-title">Suggested merges</h2>
+      {{- if .Candidates}}
+      <p class="status-note">Two entries that look like the same person. Review each and merge the ones
+        that are right — merging is durable and survives re-importing an archive.</p>
+      <ul class="space-y-2" aria-label="Suggested merges">
+        {{- range .Candidates}}
+        <li class="notice-card">
+          <p class="link-card-title">{{.NameA}} <span class="status-note">and</span> {{.NameB}}</p>
+          <p class="link-card-sub">
+            {{- if eq .Reason "phone"}}Share the phone number <span class="font-mono">{{.Value}}</span>.
+            {{- else if eq .Reason "email"}}Share the email <span class="font-mono">{{.Value}}</span>.
+            {{- else if eq .Reason "address-book"}}Your address book lists both under <strong>{{.Value}}</strong>.
+            {{- else}}Look like the same person.{{end}}
+          </p>
+          <div class="setup-card-actions">
+            <form method="post" action="/settings/contacts/merge"
+                  hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML">
+              <input type="hidden" name="setup_token" value="{{$.SetupToken}}">
+              <input type="hidden" name="a" value="{{.A}}">
+              <input type="hidden" name="b" value="{{.B}}">
+              <button type="submit" class="setup-btn"
+                      aria-label="Merge {{.NameA}} and {{.NameB}}">Merge</button>
+            </form>
+          </div>
+        </li>
+        {{- end}}
+      </ul>
+      {{- else}}
+      <p class="results-empty">No suggested merges under the current rules.</p>
+      {{- end}}
+    </section>
+
+    {{/* SPLIT overrides: the multi-identifier contacts, each with a per-source
+         identifier checklist and a Split-off-selected form. Undoes a mistaken
+         merge; the split is durable so it is never re-united. */}}
+    <section class="status-card space-y-4" aria-labelledby="contacts-split-heading">
+      <h2 id="contacts-split-heading" class="status-card-title">Merged contacts</h2>
+      {{- if .Merged}}
+      <p class="status-note">Contacts unified from more than one identifier. If two people were merged by
+        mistake, select the identifiers that belong to the <em>other</em> person and split them off. At
+        least one identifier must stay behind.</p>
+      <ul class="space-y-2" aria-label="Merged contacts">
+        {{- range .Merged}}
+        <li class="notice-card">
+          <p class="link-card-title">{{.Name}}</p>
+          <form method="post" action="/settings/contacts/split" class="space-y-2"
+                hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML">
+            <input type="hidden" name="setup_token" value="{{$.SetupToken}}">
+            <input type="hidden" name="contact_id" value="{{.ID}}">
+            <div class="flex flex-wrap gap-2">
+              {{- range .Identifiers}}
+              <label class="toggle-chip"><input type="checkbox" name="move" value="{{.Token}}"> <span class="font-mono">{{.Identifier}}</span> <span class="status-note">({{humanSource .Source}})</span></label>
+              {{- end}}
+            </div>
+            <button type="submit" class="setup-btn setup-btn-ghost"
+                    aria-label="Split selected identifiers off {{.Name}}">Split off selected</button>
+          </form>
+        </li>
+        {{- end}}
+      </ul>
+      {{- else}}
+      <p class="results-empty">No merged contacts to review.</p>
+      {{- end}}
+    </section>
+  </div>
+    </main>
+{{end}}
