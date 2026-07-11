@@ -7,6 +7,14 @@
 // URL here; the handler validates it and hands it to the shell-wired opener,
 // which launches the OS default browser.
 //
+// It also serves the shell's file downloads (issue #4): the webview has no
+// download delegate either, so the same-origin /media file-save links drop
+// their attachment navigation exactly as target="_blank" links do. desktop.js
+// routes those download anchors here too — a loopback http URL is a valid
+// http(s) URL like any other, so it flows through the same validation and
+// opener, and the OS browser downloads it via the server's
+// Content-Disposition: attachment.
+//
 // The endpoint is desktop-only and privileged in the "drive the user's
 // browser to an attacker URL" sense, so it carries checkSetupPOST's rigor
 // minus the render-minted token (link anchors are on every page; there is no

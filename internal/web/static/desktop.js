@@ -16,11 +16,17 @@
 // new-window handler, so a target="_blank" navigation to another origin is
 // silently dropped. The click interceptor below hands cross-origin http(s)
 // links to the server's POST /desktop/open-url bridge, which opens the OS
-// default browser; same-origin links are left alone. Note "left alone" is
-// not "working": a same-origin target="_blank" anchor (the media thumbs
-// resolve to this loopback origin) is still dropped by the webview for the
-// same no-new-window-handler reason — a pre-existing gap issue #179 scoped
-// out, since this bridge only covers cross-origin external links.
+// default browser.
+//
+// Same-origin FILE DOWNLOADS share that root cause (issue #4): the /media
+// file-save links (Files-tab cards, the no-preview image placeholder, the
+// transcript attachment chips — all carrying the download attribute) navigate
+// to a Content-Disposition: attachment response the webview has no download
+// delegate for (Wails v2 wires none on WKWebView/WebView2/WebKitGTK), so the
+// click is dropped and reads as "nothing happens". The interceptor routes
+// those through the same bridge; the OS browser fetches the loopback URL and
+// its attachment disposition drives a real download. Ordinary same-origin
+// links still navigate inside the webview and are left alone.
 //
 // It is included by page_start ONLY when the shell marks the render as
 // desktop-chrome (web.Server.SetDesktopChrome), and it additionally no-ops
@@ -125,11 +131,19 @@
       if (url.protocol !== "http:" && url.protocol !== "https:") {
         return;
       }
-      if (url.origin === window.location.origin) {
-        // Same-origin: not ours to intercept. Plain same-origin links
-        // navigate normally, but target="_blank" ones (the media thumbs)
-        // are still dropped by the webview — no new-window handler — a
-        // pre-existing gap out of issue #179's cross-origin scope.
+      // Cross-origin links go to the OS browser (issue #179). Same-origin
+      // links normally navigate fine inside the webview and are left alone —
+      // EXCEPT downloads (issue #4): an anchor carrying the download attribute
+      // resolves to a Content-Disposition: attachment response the webview
+      // can't render or save, so it too must be handed to the OS browser,
+      // which downloads it from the loopback server.
+      // Only the href is sent, not the download attribute, so in the webview
+      // the OS browser obeys the server's Content-Disposition alone — fine for
+      // the /media anchors, which media.go always serves as attachment. A
+      // future same-origin download anchor pointing at an inline-served type
+      // would open in the browser instead of saving.
+      var external = url.origin !== window.location.origin;
+      if (!external && !a.hasAttribute("download")) {
         return;
       }
       e.preventDefault();

@@ -118,6 +118,40 @@ func TestOpenURLWailsRejectedBytesAccepted(t *testing.T) {
 	}
 }
 
+// TestOpenURLAcceptsLoopbackMediaDownload guards the SERVER half of the issue
+// #4 desktop fix: the bridge must accept the shell's file downloads. desktop.js
+// routes same-origin /media download anchors here (the webview has no download
+// delegate), so a loopback http URL — path-encoded exactly as mediaURL emits
+// it, spaces and all — must pass validation and reach the opener byte-for-byte,
+// letting the OS browser download it via Content-Disposition: attachment. The
+// client-side selection (only download-attribute anchors, cross-origin
+// untouched) lives in desktop.js and has no Go/JS harness — it is verified by
+// review, matching #179's server-only test posture.
+func TestOpenURLAcceptsLoopbackMediaDownload(t *testing.T) {
+	cases := []struct {
+		name, raw string
+	}{
+		{"pdf attachment", "http://127.0.0.1:8787/media/1/media/lease.pdf"},
+		{"space-encoded name", "http://127.0.0.1:8787/media/2/media/scan%20final.pdf"},
+		{"localhost host", "http://localhost:8787/media/3/media/report.docx"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !validExternalURL(tc.raw) {
+				t.Fatalf("validExternalURL(%q) = false, want true (media downloads must pass the bridge)", tc.raw)
+			}
+			srv, opened := newOpenURLServer(t)
+			rec := openURLPost(t, srv, selfOrigin, tc.raw)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			if len(*opened) != 1 || (*opened)[0] != tc.raw {
+				t.Fatalf("opener saw %v, want exactly [%s] byte-for-byte", *opened, tc.raw)
+			}
+		})
+	}
+}
+
 // TestOpenURLCrossOriginRejected: a cross-origin POST is 403 and the opener is
 // never called — another local process or a hostile page must not be able to
 // drive the user's browser.
