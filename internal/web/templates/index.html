@@ -5,12 +5,15 @@
      owns <main id="main-content"> so partial responses carry no shell. */}}
 {{define "index_content"}}<title>{{.Title}}</title>
     <main id="main-content" class="flex-1" tabindex="0">
-  {{/* Home (REQ-0006-007, brief §3): a centered ~780px column on the base bg.
-       Hero wordmark + two-line tagline, a 3-cell stat strip from existing data
-       (Conversations / Messages / Newest message), then bordered quick-link
-       cards to Search / Media / Status. The brief's "On this day" and "Jump back
-       in" cards need backend queries that don't exist yet — skipped here (see
-       SPEC-0006 REQ-0006-007 notes); nothing invents a backend. */}}
+  {{/* The Overview (REQ-0006-007 home, consolidated per issue #1): a centered
+       ~780px column on the base bg. Hero wordmark + tagline, then archive
+       freshness at the top — the 3-cell global stat strip (Conversations /
+       Messages / Newest message) expanded with a per-provider breakdown
+       (counts + last-synced stamp per source) — the semantic-search index
+       status, the MCP connection card (shared with Settings via
+       mcp_connect_card), and the quick-link cards. /status and /settings stay
+       canonical: this page duplicates their headline data, it replaces
+       nothing; device pairing and snapshots deliberately stay off it. */}}
   <div class="px-6 lg:px-10 py-10">
     <div class="screen-col">
       <header class="mb-8">
@@ -23,7 +26,7 @@
       {{/* 3-cell stat strip: one bordered bar split by hairline dividers. The
            counts come from dedicated fields (not len .Conversations) so partial
            renders can skip the sidebar listing (REQ-0008-006). */}}
-      <div class="stat-strip mb-8">
+      <div class="stat-strip mb-4">
         <div class="stat-cell">
           <div class="stat-cell-label">Conversations</div>
           <div class="stat-cell-value">{{num .ConversationCount}}</div>
@@ -36,6 +39,71 @@
           <div class="stat-cell-label">Newest message</div>
           <div class="stat-cell-value stat-cell-value-sm">{{if .NewestTS}}{{.NewestTS}}{{else}}—{{end}}</div>
         </div>
+      </div>
+
+      {{/* Per-provider freshness (issue #1): one row per source with imported
+           data or a recorded ingest run, in canonical source order. "Last
+           synced" is the source's most recent completed ingest; "—" means none
+           was ever recorded (e.g. data synced in from another device). */}}
+      {{if .Providers}}
+      <div class="status-card mb-4">
+        <div class="status-card-title">By provider</div>
+        <div class="overflow-x-auto">
+          <table class="status-table">
+            <thead><tr><th>Provider</th><th>Conversations</th><th>Messages</th><th>Last synced</th></tr></thead>
+            <tbody>
+              {{- range .Providers}}
+              <tr>
+                <td>{{.Label}}</td>
+                <td class="mono">{{num .Conversations}}</td>
+                <td class="mono">{{num .Messages}}</td>
+                <td class="whitespace-nowrap">{{if .LastSync}}{{.LastSync}}{{else}}—{{end}}</td>
+              </tr>
+              {{- end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {{end}}
+
+      {{/* Semantic-search index status (issue #1): coverage of the embeddable
+           corpus for the configured model, plus the latest recorded index run —
+           live (fresh embed_runs heartbeat), stalled (heartbeat went cold
+           before the terminal write), or finished. Unconfigured renders a
+           pointer, never fake zeros. */}}
+      <div class="status-card mb-4">
+        <div class="status-card-title">Semantic search index</div>
+        {{if not .Embedding.Configured}}
+        <p class="status-note">Semantic search is not configured. Set an embedding model on the
+          <a href="/settings/llm" class="link link-hover">LLM settings</a> tab, then run
+          <code class="font-mono">msgbrowse embed</code> to index your messages.</p>
+        {{else}}
+        {{if .Embedding.InProgress}}
+        <p class="status-note mb-4" role="status"><span class="sync-badge sync-badge-info">Indexing…</span>
+          {{num .Embedding.RunEmbedded}} messages embedded so far in the current run.</p>
+        {{else if .Embedding.Stalled}}
+        <p class="status-note mb-4"><span class="sync-badge sync-badge-warn">Interrupted</span>
+          The last index run stopped before finishing — run <code class="font-mono">msgbrowse embed</code>
+          again to resume where it left off.</p>
+        {{end}}
+        <div class="status-grid">
+          <div><div class="status-metric-label">Coverage</div>
+            <div class="status-metric-value">{{num .Embedding.Embedded}} of {{num .Embedding.Embeddable}} messages ({{.Embedding.Percent}}%)</div></div>
+          <div><div class="status-metric-label">Embedding model</div>
+            <div class="status-metric-value">{{.Embedding.Model}}</div></div>
+          <div><div class="status-metric-label">Last index run</div>
+            <div class="status-metric-value">
+              {{- if .Embedding.HasLastRun}}{{.Embedding.LastFinished}} · {{num .Embedding.LastEmbedded}} embedded in {{num .Embedding.LastDurationMS}} ms
+                {{- if and .Embedding.LastModel (ne .Embedding.LastModel .Embedding.Model)}} <span class="opacity-60">(model {{.Embedding.LastModel}})</span>{{end}}
+              {{- else if .Embedding.InProgress}}running now
+              {{- else}}never{{end -}}
+            </div></div>
+        </div>
+        {{if .Embedding.LastError}}
+        <p class="status-note mt-4"><span class="sync-badge sync-badge-err">Failed</span>
+          Last run aborted: <span class="font-mono">{{.Embedding.LastError}}</span></p>
+        {{end}}
+        {{end}}
       </div>
 
       {{/* Quick-links: bordered cards with accent icons + dim subtitles. Boosted
@@ -60,7 +128,7 @@
           <span class="link-card-icon">{{template "icon-server" .}}</span>
           <span class="min-w-0">
             <span class="link-card-title block">Status &amp; backups</span>
-            <span class="link-card-sub block">Freshness &amp; snapshots</span>
+            <span class="link-card-sub block">Ingest details &amp; snapshots</span>
           </span>
         </a>
       </div>
@@ -70,6 +138,15 @@
         <p class="link-card-sub">Run <code class="font-mono">msgbrowse signal-import</code> against your archive, then refresh.</p>
       </div>
       {{end}}
+
+      {{/* MCP connection (issue #1): the same card Settings shows — endpoint
+           URL, client JSON, `claude mcp add` — shared via mcp_connect_card so
+           the two can never drift. Sits outside the HasArchive gate so a fresh
+           user can wire up their client before importing anything. Device
+           pairing stays on Settings. */}}
+      <div class="mt-8">
+        {{template "mcp_connect_card" .}}
+      </div>
     </div>
   </div>
     </main>

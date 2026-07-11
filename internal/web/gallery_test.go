@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -223,6 +224,180 @@ func TestGalleryTabPreservesFilter(t *testing.T) {
 	}
 }
 
+// TestGalleryMultiConversationParse: parseGalleryFilter reads EVERY repeated
+// ?conversation= param into the filter set (issue #6), dropping garbage,
+// non-positive ids, and duplicates; the set round-trips through filterValues
+// onto tab links and load-more URLs so it survives tab switches and infinite
+// scroll.
+func TestGalleryMultiConversationParse(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet,
+		"/gallery?tab=files&conversation=3&conversation=7&conversation=3&conversation=abc&conversation=-1&conversation=", nil)
+	form, filter := parseGalleryFilter(req)
+	want := []int64{3, 7}
+	if len(form.ConversationIDs) != 2 || form.ConversationIDs[0] != 3 || form.ConversationIDs[1] != 7 {
+		t.Fatalf("form.ConversationIDs = %v, want %v", form.ConversationIDs, want)
+	}
+	if len(filter.ConversationIDs) != 2 || filter.ConversationIDs[0] != 3 || filter.ConversationIDs[1] != 7 {
+		t.Errorf("filter.ConversationIDs = %v, want %v", filter.ConversationIDs, want)
+	}
+
+	// Tab links keep the whole set.
+	q := form.GalleryQuery("images")
+	if !strings.Contains(q, "conversation=3") || !strings.Contains(q, "conversation=7") {
+		t.Errorf("GalleryQuery dropped part of the set: %s", q)
+	}
+
+	// Load-more URLs keep the whole set alongside the keyset cursor.
+	next := form.attachmentsNextURL(&store.MediaPage{HasMore: true, NextTSUnix: 42, NextID: 9})
+	for _, want := range []string{"conversation=3", "conversation=7", "after_ts=42", "after_id=9", "tab=files"} {
+		if !strings.Contains(next, want) {
+			t.Errorf("attachmentsNextURL missing %q: %s", want, next)
+		}
+	}
+
+	// An empty selection means all conversations: no param travels.
+	empty, _ := parseGalleryFilter(httptest.NewRequest(http.MethodGet, "/gallery", nil))
+	if strings.Contains(empty.GalleryQuery("images"), "conversation=") {
+		t.Errorf("empty selection leaked a conversation param: %s", empty.GalleryQuery("images"))
+	}
+
+	// A crafted URL with thousands of distinct ids is clamped to the cap, so
+	// the id set can never approach SQLite's bound-parameter limit.
+	var sb strings.Builder
+	sb.WriteString("/gallery?tab=images")
+	for i := 1; i <= maxConversationFilterIDs+50; i++ {
+		sb.WriteString("&conversation=")
+		sb.WriteString(strconv.Itoa(i))
+	}
+	capped, _ := parseGalleryFilter(httptest.NewRequest(http.MethodGet, sb.String(), nil))
+	if len(capped.ConversationIDs) != maxConversationFilterIDs {
+		t.Errorf("cap not applied: got %d ids, want %d", len(capped.ConversationIDs), maxConversationFilterIDs)
+	}
+}
+
+// TestGalleryMultiConversationUI: the Media filter bar renders the CSP-clean
+// multi-select (a <details> dropdown of checkboxes, no inline JS), checks the
+// selected conversations, labels the collapsed control, and filters + carries
+// the set across tab links (issue #6).
+func TestGalleryMultiConversationUI(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	harper, _ := st.GetConversation(ctx, "Harper")
+	group, _ := st.GetConversation(ctx, "Group Trip")
+	if harper == nil || group == nil {
+		t.Fatal("fixture conversations missing")
+	}
+
+	rec := get(t, srv, "/gallery?conversation="+itoa(harper.ID)+"&conversation="+itoa(group.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// The control is the checkbox dropdown, not a single <select>.
+	if contains(body, `<select name="conversation"`) {
+		t.Error("conversation filter still renders a single-select")
+	}
+	for _, want := range []string{"filter-multi", "filter-multi-panel", "filter-multi-summary"} {
+		if !contains(body, want) {
+			t.Errorf("multi-select missing marker %q", want)
+		}
+	}
+	// Both selected conversations render checked; the collapsed label counts them.
+	for _, id := range []int64{harper.ID, group.ID} {
+		if !contains(body, `value="`+itoa(id)+`" checked`) {
+			t.Errorf("conversation %d checkbox not checked", id)
+		}
+	}
+	if !contains(body, "2 conversations") {
+		t.Error("collapsed multi-select label should read \"2 conversations\"")
+	}
+	// Tab links carry the whole set forward.
+	if !contains(body, "conversation="+itoa(harper.ID)) || !contains(body, "conversation="+itoa(group.ID)) {
+		t.Error("tab links dropped part of the conversation set")
+	}
+
+	// A single selection labels the control with the conversation's name and
+	// checks exactly that box.
+	rec = get(t, srv, "/gallery?conversation="+itoa(harper.ID))
+	body = rec.Body.String()
+	if !contains(body, `<span class="filter-multi-value" id="conv-filter-value">Harper</span>`) {
+		t.Error("single selection should label the control with the conversation name")
+	}
+	if contains(body, `value="`+itoa(group.ID)+`" checked`) {
+		t.Error("unselected conversation rendered checked")
+	}
+
+	// No selection = all conversations.
+	rec = get(t, srv, "/gallery")
+	if !contains(rec.Body.String(), "All conversations") {
+		t.Error("empty selection should label the control \"All conversations\"")
+	}
+}
+
+// TestGalleryMultiConversationFiltersResults: two selected conversations widen
+// the result to their union (issue #6) — badge counts equal the store's own
+// multi-id counts, and both conversations' media URLs appear.
+func TestGalleryMultiConversationFiltersResults(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	harper, _ := st.GetConversation(ctx, "Harper")
+	group, _ := st.GetConversation(ctx, "Group Trip")
+	if harper == nil || group == nil {
+		t.Fatal("fixture conversations missing")
+	}
+
+	counts, err := st.CountMedia(ctx, store.GalleryFilter{ConversationIDs: []int64{harper.ID, group.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harperOnly, err := st.CountMedia(ctx, store.GalleryFilter{ConversationIDs: []int64{harper.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Images <= harperOnly.Images {
+		t.Fatalf("fixture should widen the union: both=%+v harper=%+v", counts, harperOnly)
+	}
+
+	rec := get(t, srv, "/gallery?conversation="+itoa(harper.ID)+"&conversation="+itoa(group.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !contains(body, "Images <span class=\"media-tab-badge\">"+strconv.Itoa(counts.Images)+"</span>") {
+		t.Errorf("images badge should show the union count %d", counts.Images)
+	}
+	// Both conversations contribute tiles.
+	if !contains(body, "/media/"+itoa(harper.ID)+"/") || !contains(body, "/media/"+itoa(group.ID)+"/") {
+		t.Error("union page missing one conversation's media")
+	}
+}
+
+// TestGalleryLinksSortHiddenInput is the PR #16 review nit: the Links tab
+// hides the (inert) Sort select, so a previously chosen non-default sort must
+// travel as a hidden input — otherwise pressing Apply from Links silently
+// resets the order the user picked on Images/Files.
+func TestGalleryLinksSortHiddenInput(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	rec := get(t, srv, "/gallery?tab=links&sort=asc")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !contains(rec.Body.String(), `<input type="hidden" name="sort" value="asc">`) {
+		t.Error("links tab dropped sort=asc: no hidden input in the filter form")
+	}
+
+	// The default order stays implicit — no hidden input, no ?sort= noise.
+	rec = get(t, srv, "/gallery?tab=links")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if contains(rec.Body.String(), `name="sort"`) {
+		t.Error("default links tab should carry no sort control or hidden input")
+	}
+}
+
 // TestGallerySort covers the Media sort control (issue #5): the filter bar
 // offers Newest/Oldest, ?sort=asc round-trips through parseGalleryFilter and
 // flips the rendered order, and the choice rides tab links + the load-more
@@ -278,14 +453,14 @@ func TestGallerySort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	descPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationID: id}, 0, 0)
+	descPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationIDs: []int64{id}}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(descPage.Items) != 2 || descPage.Items[0].OriginalName != "new.jpg" {
 		t.Fatalf("default order = %+v, want new.jpg first", descPage.Items)
 	}
-	ascPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationID: id, SortAsc: true}, 0, 0)
+	ascPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationIDs: []int64{id}, SortAsc: true}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +661,7 @@ func TestGalleryCountsMatchStore(t *testing.T) {
 		filter store.GalleryFilter
 	}{
 		{"/gallery", store.GalleryFilter{}},
-		{"/gallery?conversation=" + itoa(conv.ID), store.GalleryFilter{ConversationID: conv.ID}},
+		{"/gallery?conversation=" + itoa(conv.ID), store.GalleryFilter{ConversationIDs: []int64{conv.ID}}},
 		{"/gallery?source=signal", store.GalleryFilter{Source: source.Signal}},
 	} {
 		counts, err := st.CountMedia(ctx, tc.filter)

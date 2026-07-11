@@ -16,12 +16,15 @@ import (
 // construction: ReplaceConversationMessages stamps one source per replace and
 // conversations are UNIQUE(source, name)).
 type GalleryFilter struct {
-	ConversationID int64
-	Source         string
-	Domain         string // links only; exact match after www-stripping (MCP list_links)
-	StartUnix      int64
-	EndUnix        int64
-	Limit          int
+	// ConversationIDs limits results to any of these conversations (issue #6:
+	// the Media filter is multi-select). Empty means all conversations; ids
+	// bind as an IN(...) parameter set, never string-interpolated.
+	ConversationIDs []int64
+	Source          string
+	Domain          string // links only; exact match after www-stripping (MCP list_links)
+	StartUnix       int64
+	EndUnix         int64
+	Limit           int
 	// SortAsc flips the attachment walk to oldest-first; the zero value keeps
 	// the newest-first default. Links stay domain-ordered regardless (their
 	// display order is grouped, not chronological), so this only steers
@@ -90,14 +93,22 @@ type LinkPage struct {
 	Next    LinkCursor
 }
 
+// inPlaceholders returns a "?,?,..." list of n bound-parameter placeholders
+// for an IN(...) set.
+func inPlaceholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
 // attachmentClauses builds WHERE clauses (alias a) for attachments queries.
 // Only denormalized columns appear — see GalleryFilter.
 func attachmentClauses(f GalleryFilter) ([]string, []any) {
 	var where []string
 	var args []any
-	if f.ConversationID > 0 {
-		where = append(where, "a.conversation_id = ?")
-		args = append(args, f.ConversationID)
+	if n := len(f.ConversationIDs); n > 0 {
+		where = append(where, "a.conversation_id IN ("+inPlaceholders(n)+")")
+		for _, id := range f.ConversationIDs {
+			args = append(args, id)
+		}
 	}
 	if f.Source != "" {
 		where = append(where, "a.conversation_id IN (SELECT id FROM conversations WHERE source = ?)")
@@ -119,9 +130,11 @@ func attachmentClauses(f GalleryFilter) ([]string, []any) {
 func linkClauses(f GalleryFilter) ([]string, []any) {
 	var where []string
 	var args []any
-	if f.ConversationID > 0 {
-		where = append(where, "l.conversation_id = ?")
-		args = append(args, f.ConversationID)
+	if n := len(f.ConversationIDs); n > 0 {
+		where = append(where, "l.conversation_id IN ("+inPlaceholders(n)+")")
+		for _, id := range f.ConversationIDs {
+			args = append(args, id)
+		}
 	}
 	if f.Source != "" {
 		where = append(where, "l.conversation_id IN (SELECT id FROM conversations WHERE source = ?)")
@@ -179,17 +192,18 @@ func galleryLimit(f GalleryFilter, def, max int) int {
 //     within a kind, so the scan emits rows already in display order and stops
 //     at LIMIT — no sort, no messages touch (measured 357 ms → 10 ms).
 //   - Conversation-filtered paths seek idx_attachments_conv_kind instead: the
-//     candidate set is bounded by that conversation's attachments, so the
-//     residual sort is small; walking the kind_ts index here would degrade to
-//     a full-index walk for conversations with few recent attachments
-//     (measured 104 ms vs 1 ms on a sparse conversation).
+//     candidate set is bounded by the selected conversations' attachments
+//     (SQLite runs an IN(...) over the index's leading column as one seek per
+//     id), so the residual sort is small; walking the kind_ts index here would
+//     degrade to a full-index walk for conversations with few recent
+//     attachments (measured 104 ms vs 1 ms on a sparse conversation).
 //
 // messages and conversations are joined unaliased and only by INTEGER PRIMARY
 // KEY for the ≤ limit result rows — plans SEARCH them, never SCAN.
 func listAttachmentsSQL(kind string, f GalleryFilter, cursorTSUnix, cursorID int64, limit int) (string, []any) {
 	clauses, filterArgs := attachmentClauses(f)
 	idx := "idx_attachments_kind_ts"
-	if f.ConversationID > 0 {
+	if len(f.ConversationIDs) > 0 {
 		idx = "idx_attachments_conv_kind"
 	}
 	q := `

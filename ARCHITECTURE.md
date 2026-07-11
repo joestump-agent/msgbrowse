@@ -25,6 +25,7 @@ cmd/msgbrowse-desktop    Wails v2 desktop shell + systray, embedding the same we
     ├── internal/facts   incremental, cited contact-fact extraction (LLM)
     ├── internal/imageconv  transcode HEIC/TIFF → cached JPEG (external converter, ADR-0014)
     ├── internal/archivepath shared, traversal-safe attachment path resolution
+    ├── internal/contacts pluggable address-book Resolver seam + identifier normalization (contact merging)
     ├── internal/setup   source detection + permission probes for guided setup
     ├── internal/onboard(+svc) exporter execution: one-click Enable/Refresh runs (ADR-0020)
     ├── internal/devices device identity: Syncthing device-ID parsing + pairing payloads
@@ -141,8 +142,9 @@ the UI loads — CSS, htmx, the theme script, icons — is same-origin.
 - [ADR-0017](docs/adr/0017-desktop-shell-wails.md) — desktop shell: Wails v2 window over the embedded web server.
 - [ADR-0020](docs/adr/0020-bundled-exporters-guided-setup.md) — bundled exporter toolchain in the `.app` + guided setup.
 - [ADR-0021](docs/adr/0021-syncthing-sync-engine.md) — device sync: supervised Syncthing engine (supersedes ADR-0018).
+- [ADR-0022](docs/adr/0022-contact-merging-and-address-book-abstraction.md) — contact merging + address-book abstraction (pure-Go resolver seam, macOS provider behind a build tag).
 
-The full set (ADR-0001–0021) lives in [`docs/adr/`](docs/adr/).
+The full set (ADR-0001–0022) lives in [`docs/adr/`](docs/adr/).
 
 ## Containerization
 
