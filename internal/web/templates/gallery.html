@@ -41,6 +41,19 @@
       </label>
       <label class="filter-control"><span class="filter-label">From</span><input type="date" name="start" value="{{.Filter.Start}}" class="filter-input"></label>
       <label class="filter-control"><span class="filter-label">To</span><input type="date" name="end" value="{{.Filter.End}}" class="filter-input"></label>
+      {{/* Sort steers the Images/Files walk (Links stay domain-grouped); the
+           value round-trips through parseGalleryFilter and rides tab + load-more
+           URLs so infinite scroll keeps the order. Hidden on the Links tab where
+           it is inert, so a stale selection can't read as a broken Apply. */}}
+      {{if ne .Filter.Tab "links"}}
+      <label class="filter-control">
+        <span class="filter-label">Sort</span>
+        <select name="sort" class="filter-input">
+          <option value="desc" {{if eq .Filter.Sort "desc"}}selected{{end}}>Newest first</option>
+          <option value="asc" {{if eq .Filter.Sort "asc"}}selected{{end}}>Oldest first</option>
+        </select>
+      </label>
+      {{end}}
       <button type="submit" class="btn-search">Apply</button>
     </form>
 
@@ -107,7 +120,10 @@
   {{/* Non-web format (e.g. HEIC) with no transcoded derivative: show a
        striped placeholder linking to the original for download, not a
        broken img. */}}
-  <a class="media-tile media-tile-placeholder" href="{{mediaURL .ConversationID .RelPath}}" title="{{.OriginalName}} (download)" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">
+  {{/* hx-boost="false" (issue #4): same download contract as the Files tab —
+       this placeholder links straight at /media for a download, so it must
+       stay a native navigation and never be turned into an htmx swap. */}}
+  <a class="media-tile media-tile-placeholder" hx-boost="false" href="{{mediaURL .ConversationID .RelPath}}" title="{{.OriginalName}} (download)" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">
     {{template "icon-photo" $}}
     <span class="ph-name">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span>
     <span class="ph-tag">no preview</span>
@@ -129,8 +145,17 @@
   {{- range .Files}}
   <li class="media-list-card">
     {{/* download (issue #161): file cards save the file — the webview never
-         navigates to a raw response. */}}
-    <a class="media-file-name" href="{{mediaURL .ConversationID .RelPath}}" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
+         navigates to a raw response. hx-boost="false" (issue #4): this anchor
+         MUST stay a native browser navigation so the server's
+         Content-Disposition: attachment (media.go) drives a real download.
+         The app boosts navigation by container (the header nav, the sidebar
+         aside), so any future change that wraps #main-content — or moves these
+         cards — in a boosted region would make htmx AJAX the click and try to
+         swap the binary attachment body into #main-content; htmx can't swap a
+         non-HTML/error response, so the click would read as "nothing happens"
+         (the reported bug). The explicit opt-out makes the download contract
+         immune to that, in the initial page and every infinite-scroll page. */}}
+    <a class="media-file-name" hx-boost="false" href="{{mediaURL .ConversationID .RelPath}}" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
     <div class="media-card-meta">
       {{- if .ContentType}}<span class="font-mono">{{.ContentType}}</span>{{else}}<span class="font-mono">unknown</span>{{end}}
       {{- if .SizeHuman}} · <span class="font-mono">{{.SizeHuman}}</span>{{end}}
@@ -163,7 +188,13 @@
     <ul class="media-list">
       {{- range .Links}}
       <li class="media-list-card">
-        <a class="media-link-url" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{.URL}}</a>
+        {{/* The URL links out; the sibling icon-only copy button copies the same
+             full URL via copy.js (data-copy-value). Sibling, not child, so the
+             copy click never navigates (#14). */}}
+        <div class="media-link-row">
+          <a class="media-link-url" href="{{.URL}}" target="_blank" rel="noopener noreferrer nofollow">{{.URL}}</a>
+          <button type="button" class="copy-btn copy-btn-inline" data-copy-value="{{.URL}}" data-copy-announce="Link copied" aria-label="Copy link"><span class="icon-copy">{{template "icon-copy" $}}</span><span class="icon-check">{{template "icon-check" $}}</span></button>
+        </div>
         <div class="media-card-meta">
           {{- if gt .Count 1}}<span class="font-mono">×{{num .Count}}</span> · {{end}}
           <a href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>

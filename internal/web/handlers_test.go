@@ -255,6 +255,41 @@ func TestConversationTranscript(t *testing.T) {
 	}
 }
 
+// TestTranscriptImageOpensLightbox (issue #3): a renderable inline image in the
+// transcript must open the same pure-CSS :target lightbox the Media tab uses,
+// not a raw-file new-tab link. We assert the thumbnail anchors at a #lb-… target
+// and that a matching hidden .lightbox overlay (with the media original and a
+// close affordance) is emitted for it — CSP-safe, no JS.
+func TestTranscriptImageOpensLightbox(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	conv, err := st.GetConversation(context.Background(), "Harper")
+	if err != nil || conv == nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	body := get(t, srv, "/c/"+itoa(conv.ID)).Body.String()
+
+	// The thumbnail must link to a lightbox fragment (not open the raw file in a
+	// new tab). The old regression was a target="_blank" anchor straight to media.
+	if !contains(body, `class="msg-thumb" href="#lb-`) {
+		t.Errorf("transcript image thumbnail not wired to a #lb-… lightbox target")
+	}
+	if contains(body, `class="msg-thumb" href="/media/`) {
+		t.Errorf("transcript image thumbnail still links straight to the raw media file")
+	}
+
+	// The matching hidden overlay must exist, share the gallery's .lightbox class,
+	// carry a close affordance, and point at the same media original the tile does.
+	if !contains(body, `<div class="lightbox" id="lb-`) {
+		t.Errorf("transcript missing the :target lightbox overlay")
+	}
+	if !contains(body, "lightbox-close") {
+		t.Errorf("transcript lightbox missing its close control")
+	}
+	if !contains(body, `id="lb-`) || !contains(body, "/media/"+itoa(conv.ID)+"/media/cabin.jpg") {
+		t.Errorf("transcript lightbox does not reference the media original")
+	}
+}
+
 // TestConversationSortAscRoundTrip verifies the ?sort=asc legacy view: oldest
 // message first, the toggle pressed and linking back to the newest-first
 // default.

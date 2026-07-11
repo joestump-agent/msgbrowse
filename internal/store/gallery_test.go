@@ -106,6 +106,50 @@ func TestListAttachments(t *testing.T) {
 	}
 }
 
+// TestListAttachmentsSortAsc: the SortAsc filter flips the walk to oldest-first
+// (issue #5) — the reverse of the default — and its keyset cursor still pages
+// forward without overlap or gaps.
+func TestListAttachmentsSortAsc(t *testing.T) {
+	st, _, _ := seedGalleryCorpus(t)
+	ctx := context.Background()
+
+	// Default is newest-first (sunset 2022-04 before cabin 2022-03).
+	desc, err := st.ListAttachments(ctx, "image", GalleryFilter{}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(desc.Items) != 2 || desc.Items[0].OriginalName != "sunset.png" {
+		t.Fatalf("default order = %+v, want [sunset.png cabin.jpg]", desc.Items)
+	}
+
+	// SortAsc reverses it: cabin (older) first, sunset (newer) last.
+	asc, err := st.ListAttachments(ctx, "image", GalleryFilter{SortAsc: true}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asc.Items) != 2 || asc.Items[0].OriginalName != "cabin.jpg" || asc.Items[1].OriginalName != "sunset.png" {
+		t.Errorf("SortAsc order = %+v, want [cabin.jpg sunset.png]", asc.Items)
+	}
+
+	// The oldest-first cursor pages forward through the same rows with a limit of
+	// 1: page one is cabin, its cursor yields sunset, no overlap.
+	f := GalleryFilter{SortAsc: true, Limit: 1}
+	p1, err := st.ListAttachments(ctx, "image", f, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p1.Items) != 1 || p1.Items[0].OriginalName != "cabin.jpg" || !p1.HasMore {
+		t.Fatalf("asc page 1 = %+v (HasMore=%v), want [cabin.jpg] (true)", p1.Items, p1.HasMore)
+	}
+	p2, err := st.ListAttachments(ctx, "image", f, p1.NextTSUnix, p1.NextID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p2.Items) != 1 || p2.Items[0].OriginalName != "sunset.png" || p2.HasMore {
+		t.Errorf("asc page 2 = %+v (HasMore=%v), want [sunset.png] (false)", p2.Items, p2.HasMore)
+	}
+}
+
 // TestListAttachmentsPagination walks a corpus larger than the page size and
 // asserts every page respects the limit, pages are disjoint, and the union in
 // cursor order equals the single-shot listing (issue #77: no >LIMIT rows).
@@ -370,6 +414,7 @@ func TestGalleryQueryPlans(t *testing.T) {
 		"conversation": {ConversationID: harper},
 		"source":       {Source: source.Signal},
 		"date":         {StartUnix: 1, EndUnix: 2000000000},
+		"sort-asc":     {SortAsc: true}, // oldest-first must also drive from the index
 	}
 
 	for name, f := range filters {

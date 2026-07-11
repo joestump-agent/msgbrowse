@@ -3,7 +3,11 @@
 // CSP — no inline handlers.
 //
 // Any button carrying data-copy-target="<id>" copies the textContent of the
-// element with that id. Feedback is doubled per the spec's Accessibility
+// element with that id. A button carrying data-copy-value="<text>" instead
+// copies that literal string — for tiles whose visible text isn't the value to
+// copy (e.g. a link pill that shows only the domain but must copy the full URL,
+// issue #14), which would otherwise need a hidden per-item element + unique id.
+// data-copy-value wins when both are present. Feedback is doubled per the spec's Accessibility
 // requirements: visually, the button swaps its copy icon for a check for a
 // couple of seconds (.copied class); for assistive tech, the button's
 // data-copy-announce text is written into the #copy-announce
@@ -59,11 +63,18 @@
   document.addEventListener("click", function (e) {
     var target = e.target;
     if (!target || !target.closest) return;
-    var btn = target.closest("[data-copy-target]");
+    // data-copy-value carries the literal text to copy; data-copy-target names
+    // an element whose textContent is copied. Prefer the literal when present.
+    var btn = target.closest("[data-copy-value],[data-copy-target]");
     if (!btn) return;
-    var src = document.getElementById(btn.getAttribute("data-copy-target"));
-    if (!src) return;
-    var text = src.textContent.trim();
+    var text;
+    if (btn.hasAttribute("data-copy-value")) {
+      text = btn.getAttribute("data-copy-value");
+    } else {
+      var src = document.getElementById(btn.getAttribute("data-copy-target"));
+      if (!src) return;
+      text = src.textContent.trim();
+    }
 
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(text).then(

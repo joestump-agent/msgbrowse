@@ -1021,6 +1021,13 @@ a.meta-chip:hover {
   background: color-mix(in oklab, var(--color-primary) 12%, transparent);
   border-color: color-mix(in oklab, var(--color-primary) 55%, transparent);
 }
+/* Link tile (#14): wraps a .link-pill with its inline copy button so the pair
+   wraps as one unit inside .msg-links and the button sits just off the pill. */
+.link-tile {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
 
 /* Reaction badges: small emoji pills under a message, with an optional repeat
  * count. Driven by the slate variables so the light variant restyles for free. */
@@ -1588,11 +1595,22 @@ a.meta-chip:hover {
 .media-card-meta a:hover {
   color: var(--color-primary);
 }
+/* Media→Links row (#14): the full-URL link plus its inline copy button on one
+   line — the URL flexes and wraps, the button stays put at the top-right. */
+.media-link-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
 .media-link-url {
   display: block;
   font-size: 13px;
   color: var(--color-primary);
   word-break: break-all;
+}
+.media-link-row .media-link-url {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .media-link-url:hover {
   text-decoration: underline;
@@ -1805,6 +1823,17 @@ a.meta-chip:hover {
 .copy-btn:hover {
   background: color-mix(in oklab, var(--color-primary) 10%, var(--color-base-200));
   color: var(--color-base-content);
+}
+/* Inline copy button for the link tile (#14): the base .copy-btn is absolutely
+   pinned to a copy-block corner; here it rides inline beside the tile instead,
+   sized down to sit with the 12–13px pill/URL. It keeps .copy-btn's icon-swap
+   and :focus-visible rules, so the copy→check acknowledgment and keyboard
+   outline come for free. flex:none keeps it from shrinking in the flex row. */
+.copy-btn-inline {
+  position: static;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
 }
 /* Visible keyboard focus (SPEC-0010 §Accessibility "Keyboard navigation"). */
 .copy-btn:focus-visible {

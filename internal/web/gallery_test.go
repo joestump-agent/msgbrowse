@@ -57,6 +57,60 @@ func TestGalleryFilesTab(t *testing.T) {
 	}
 }
 
+// fileAnchorRE isolates the file card's download anchor so a test can assert
+// its attributes without matching the unrelated meta-row links in the card.
+var fileAnchorRE = regexp.MustCompile(`<a class="media-file-name"[^>]*>`)
+
+// TestGalleryFilesDownloadNotBoosted is the issue #4 regression: the file
+// card's download anchor must carry hx-boost="false" so htmx never AJAX-swaps
+// the click — the binary /media response can't be swapped into #main-content,
+// which is exactly the "clicking a file does nothing" symptom. It must also
+// keep its download attribute (issue #161). The check runs on BOTH the initial
+// files tab AND an infinite-scroll continuation fragment, since both are the
+// one gallery_files_page template define.
+func TestGalleryFilesDownloadNotBoosted(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+
+	for _, path := range []string{"/gallery?tab=files", "/gallery/items?tab=files"} {
+		rec := get(t, srv, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, rec.Code)
+		}
+		anchors := fileAnchorRE.FindAllString(rec.Body.String(), -1)
+		if len(anchors) == 0 {
+			t.Fatalf("GET %s rendered no file download anchors", path)
+		}
+		for _, a := range anchors {
+			if !strings.Contains(a, `hx-boost="false"`) {
+				t.Errorf("GET %s: file anchor not opted out of hx-boost: %s", path, a)
+			}
+			if !strings.Contains(a, "download=") {
+				t.Errorf("GET %s: file anchor lost its download attribute: %s", path, a)
+			}
+		}
+	}
+}
+
+// TestMediaServesAttachment is the server-side half of issue #4: a non-image
+// attachment must come back with Content-Disposition: attachment so the native
+// (un-boosted) anchor navigation downloads it rather than trying to render a
+// raw binary in the page.
+func TestMediaServesAttachment(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	conv, _ := st.GetConversation(context.Background(), "Harper")
+
+	rec := get(t, srv, "/media/"+itoa(conv.ID)+"/media/lease.pdf")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+		t.Errorf("Content-Disposition = %q, want attachment", cd)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/pdf") {
+		t.Errorf("Content-Type = %q, want application/pdf", ct)
+	}
+}
+
 func TestGalleryLinksTab(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	rec := get(t, srv, "/gallery?tab=links")
@@ -73,6 +127,88 @@ func TestGalleryLinksTab(t *testing.T) {
 	}
 }
 
+// seedLinkConversation writes one conversation carrying a single message with
+// the given link URL and returns nothing — callers query by the URL. Shared by
+// the #14 copy-control tests (transcript pill + Media→Links row).
+func seedLinkConversation(t *testing.T, st *store.Store, name, url string) {
+	t.Helper()
+	ctx := context.Background()
+	id, err := st.UpsertConversation(ctx, source.Signal, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := time.Parse(signal.TimestampLayout, "2022-06-01 10:00:00")
+	if _, err := st.ReplaceConversationMessages(ctx, id, source.Signal, []signal.Message{
+		{Conversation: name, Timestamp: parsed, TimestampRaw: "2022-06-01 10:00:00",
+			Sender: "Robin", Body: "see this", Links: []signal.Link{{URL: url}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGalleryLinkCopyButton asserts each Media→Links row carries an icon-only
+// copy control whose copy *source* is the FULL URL (issue #14): copy.js reads
+// data-copy-value, so the whole URL — not just the grouped domain — reaches the
+// clipboard. The control is labeled for the keyboard, and the row's own link
+// still points out so click-through-to-open is untouched.
+func TestGalleryLinkCopyButton(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	const url = "https://docs.example.org/guide/copy-me"
+	seedLinkConversation(t, st, "Linky", url)
+
+	rec := get(t, srv, "/gallery?tab=links")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// The copy button's source is the full URL (not the domain).
+	if !contains(body, `data-copy-value="`+url+`"`) {
+		t.Errorf("Media→Links row missing a copy button sourced from the full URL: %s", body)
+	}
+	// Keyboard-operable + labeled, and the inline icon-swap button markup.
+	if !contains(body, `aria-label="Copy link"`) || !contains(body, "copy-btn-inline") {
+		t.Error("link copy button missing its aria-label or inline copy-btn class")
+	}
+	// Click-through-to-open preserved: the URL still links out.
+	if !contains(body, `class="media-link-url" href="`+url+`"`) {
+		t.Error("Media→Links row dropped the click-through-to-open link")
+	}
+}
+
+// TestTranscriptLinkCopyButton asserts the transcript link pill (which shows
+// only the DOMAIN) gains an icon-only copy control that copies the FULL URL via
+// data-copy-value, without breaking the pill's link-out (issue #14).
+func TestTranscriptLinkCopyButton(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	const url = "https://blog.example.net/a/very/long/path?ref=chat"
+	seedLinkConversation(t, st, "Linky", url)
+	conv, err := st.GetConversation(context.Background(), "Linky")
+	if err != nil || conv == nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+
+	rec := get(t, srv, "/c/"+itoa(conv.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// The pill still links out (click-through-to-open) ...
+	if !contains(body, `class="link-pill" href="`+url+`"`) {
+		t.Errorf("transcript link pill dropped its link-out: %s", body)
+	}
+	// ... and the sibling copy button copies the full URL, labeled and inline.
+	if !contains(body, `data-copy-value="`+url+`"`) {
+		t.Error("transcript link tile missing a copy button sourced from the full URL")
+	}
+	if !contains(body, `aria-label="Copy link"`) || !contains(body, "copy-btn-inline") {
+		t.Error("transcript copy button missing its aria-label or inline copy-btn class")
+	}
+	// The shared aria-live announce region is present in the shell (page_end).
+	if !contains(body, `id="copy-announce"`) || !contains(body, `aria-live="polite"`) {
+		t.Error("transcript page missing the shared #copy-announce live region")
+	}
+}
+
 func TestGalleryTabPreservesFilter(t *testing.T) {
 	srv, st, _ := newTestServer(t)
 	conv, _ := st.GetConversation(context.Background(), "Harper")
@@ -84,6 +220,77 @@ func TestGalleryTabPreservesFilter(t *testing.T) {
 	// Tab links should carry the conversation filter forward.
 	if !contains(body, "conversation="+itoa(conv.ID)) {
 		t.Errorf("tab links dropped the conversation filter")
+	}
+}
+
+// TestGallerySort covers the Media sort control (issue #5): the filter bar
+// offers Newest/Oldest, ?sort=asc round-trips through parseGalleryFilter and
+// flips the rendered order, and the choice rides tab links + the load-more
+// sentinel so infinite scroll keeps the order. Default URLs omit ?sort=.
+func TestGallerySort(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+
+	// The default page carries the Sort control but no ?sort= in its tab links.
+	rec := get(t, srv, "/gallery")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !contains(body, `name="sort"`) || !contains(body, "Newest first") || !contains(body, "Oldest first") {
+		t.Errorf("filter bar missing the sort control")
+	}
+	if contains(body, "sort=asc") {
+		t.Errorf("default page leaked sort=asc into a URL: %s", body)
+	}
+
+	// parseSort/filter round-trip: sort=asc selects the Oldest option and rides
+	// tab links + the load-more sentinel.
+	rec = get(t, srv, "/gallery?tab=images&sort=asc")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("asc status = %d", rec.Code)
+	}
+	body = rec.Body.String()
+	if !contains(body, `<option value="asc" selected>`) {
+		t.Errorf("sort=asc did not select the Oldest option")
+	}
+	// Tab links preserve the sort.
+	if !contains(body, "sort=asc") {
+		t.Errorf("tab links dropped sort=asc")
+	}
+
+	// Store-backed order flip: seed two images and confirm the oldest-first page
+	// renders them ahead of the default newest-first page. The fixture's own
+	// images share a coarse ordering, so use a dedicated conversation.
+	ctx := context.Background()
+	id, err := st.UpsertConversation(ctx, source.Signal, "Sortie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, _ := time.Parse(signal.TimestampLayout, "2020-01-01 09:00:00")
+	newer, _ := time.Parse(signal.TimestampLayout, "2021-01-01 09:00:00")
+	imgAtt := func(name string) []signal.Attachment {
+		return []signal.Attachment{{Kind: signal.KindImage, RelPath: "media/" + name, OriginalName: name}}
+	}
+	_, err = st.ReplaceConversationMessages(ctx, id, source.Signal, []signal.Message{
+		{Conversation: "Sortie", Timestamp: older, TimestampRaw: "2020-01-01 09:00:00", Sender: "A", Body: "x", Attachments: imgAtt("old.jpg")},
+		{Conversation: "Sortie", Timestamp: newer, TimestampRaw: "2021-01-01 09:00:00", Sender: "A", Body: "x", Attachments: imgAtt("new.jpg")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationID: id}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(descPage.Items) != 2 || descPage.Items[0].OriginalName != "new.jpg" {
+		t.Fatalf("default order = %+v, want new.jpg first", descPage.Items)
+	}
+	ascPage, err := st.ListAttachments(ctx, "image", store.GalleryFilter{ConversationID: id, SortAsc: true}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ascPage.Items) != 2 || ascPage.Items[0].OriginalName != "old.jpg" {
+		t.Errorf("SortAsc order = %+v, want old.jpg first", ascPage.Items)
 	}
 }
 
