@@ -260,6 +260,19 @@ func TestGalleryMultiConversationParse(t *testing.T) {
 	if strings.Contains(empty.GalleryQuery("images"), "conversation=") {
 		t.Errorf("empty selection leaked a conversation param: %s", empty.GalleryQuery("images"))
 	}
+
+	// A crafted URL with thousands of distinct ids is clamped to the cap, so
+	// the id set can never approach SQLite's bound-parameter limit.
+	var sb strings.Builder
+	sb.WriteString("/gallery?tab=images")
+	for i := 1; i <= maxConversationFilterIDs+50; i++ {
+		sb.WriteString("&conversation=")
+		sb.WriteString(strconv.Itoa(i))
+	}
+	capped, _ := parseGalleryFilter(httptest.NewRequest(http.MethodGet, sb.String(), nil))
+	if len(capped.ConversationIDs) != maxConversationFilterIDs {
+		t.Errorf("cap not applied: got %d ids, want %d", len(capped.ConversationIDs), maxConversationFilterIDs)
+	}
 }
 
 // TestGalleryMultiConversationUI: the Media filter bar renders the CSP-clean
@@ -308,7 +321,7 @@ func TestGalleryMultiConversationUI(t *testing.T) {
 	// checks exactly that box.
 	rec = get(t, srv, "/gallery?conversation="+itoa(harper.ID))
 	body = rec.Body.String()
-	if !contains(body, `<span class="filter-multi-value">Harper</span>`) {
+	if !contains(body, `<span class="filter-multi-value" id="conv-filter-value">Harper</span>`) {
 		t.Error("single selection should label the control with the conversation name")
 	}
 	if contains(body, `value="`+itoa(group.ID)+`" checked`) {

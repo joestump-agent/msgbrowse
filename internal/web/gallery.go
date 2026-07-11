@@ -88,6 +88,11 @@ type galleryData struct {
 // validTabs are the gallery's three views.
 var validTabs = map[string]bool{"images": true, "files": true, "links": true}
 
+// maxConversationFilterIDs caps how many distinct ?conversation= ids a request
+// may carry. The UI can never produce more than one per conversation, so the
+// cap only bites hand-crafted URLs.
+const maxConversationFilterIDs = 200
+
 func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var base baseData
@@ -266,6 +271,9 @@ func parseGalleryFilter(r *http.Request) (galleryFilterForm, store.GalleryFilter
 	}
 	// Multi-select conversation filter (issue #6): every checked box repeats
 	// ?conversation=. Garbage and duplicates drop out; an empty set means all.
+	// The set is capped well below SQLite's bound-parameter limit (32766 for
+	// modernc.org/sqlite) — each id becomes one IN(...) parameter, and without
+	// a cap a crafted URL could make every gallery query fail at prepare.
 	var convIDs []int64
 	seen := map[int64]bool{}
 	for _, raw := range r.URL.Query()["conversation"] {
@@ -275,6 +283,9 @@ func parseGalleryFilter(r *http.Request) (galleryFilterForm, store.GalleryFilter
 		}
 		seen[id] = true
 		convIDs = append(convIDs, id)
+		if len(convIDs) == maxConversationFilterIDs {
+			break
+		}
 	}
 	src := r.URL.Query().Get("source")
 	if !source.IsKnown(src) {

@@ -30,7 +30,7 @@
              listing — NOT the sidebar summaries — so partial renders never
              pay for the full listing (REQ-0008-006). */}}
         <details class="filter-multi">
-          <summary class="filter-input filter-multi-summary" aria-labelledby="conv-filter-label"><span class="filter-multi-value">{{.ConversationFilterLabel}}</span></summary>
+          <summary class="filter-input filter-multi-summary" aria-labelledby="conv-filter-label conv-filter-value"><span class="filter-multi-value" id="conv-filter-value">{{.ConversationFilterLabel}}</span></summary>
           <ul class="filter-multi-panel">
             {{- range .FilterConversations}}
             <li><label class="filter-multi-option"><input type="checkbox" name="conversation" value="{{.ID}}"{{if $.Filter.HasConversation .ID}} checked{{end}}><span class="filter-multi-name">{{humanName .Name}}</span></label></li>
