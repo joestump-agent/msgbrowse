@@ -50,3 +50,7 @@
 
 # Transient agent worktrees (created under the repo by background agents)
 /.claude/
+
+# Tailwind CLI shim scratch (see Makefile css target / CONTRIBUTING) — never commit
+/node_modules
+/.tools/
