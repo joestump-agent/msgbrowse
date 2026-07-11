@@ -53,8 +53,18 @@ func newLLMHolder(cfg *config.Config) *llm.Holder {
 		EmbedModel: cfg.LLM.EmbedModel,
 		ChatModel:  cfg.LLM.ChatModel,
 		APIKey:     cfg.LLM.APIKey,
+		// A key supplied through MSGBROWSE_LLM_API_KEY must never be written to
+		// the config file (that would leak an env-scoped secret to disk). viper's
+		// AutomaticEnv has already folded the env value into cfg.LLM.APIKey, so we
+		// read the raw env var to recover its provenance.
+		APIKeyFromEnv: os.Getenv(llmAPIKeyEnvVar) != "",
 	})
 }
+
+// llmAPIKeyEnvVar is the environment variable viper maps to llm.api_key
+// (SetEnvPrefix "MSGBROWSE" + the "." → "_" replacer). A non-empty value means
+// the effective key is env-provided and must not be persisted to config.
+const llmAPIKeyEnvVar = "MSGBROWSE_LLM_API_KEY"
 
 // llmConfigSavePath resolves where the Settings → LLM tab persists (#191):
 // the config file this process actually loaded, else the standard per-user
@@ -83,7 +93,15 @@ func newLLMApplier(cfg *config.Config, holder *llm.Holder) *llm.Applier {
 		if err != nil {
 			return err
 		}
-		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel, s.APIKey)
+		// Never persist an env-provided key: write it blank so the config file
+		// stays a placeholder and MSGBROWSE_LLM_API_KEY remains the sole home of
+		// the secret. The live client still runs on s.APIKey (the swap below in
+		// Applier.ApplyLLM); only the on-disk copy is suppressed.
+		storedKey := s.APIKey
+		if s.APIKeyFromEnv {
+			storedKey = ""
+		}
+		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel, storedKey)
 	})
 }
 

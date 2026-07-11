@@ -123,11 +123,13 @@
 
         <div class="space-y-1">
           <label class="eyebrow block" for="llm-api-key">API key</label>
-          {{/* Secret field: type=password, autocomplete off, and the value is
-               NEVER rendered back (only whether one is set). A blank submission
-               keeps the current key; type a new one to replace it. */}}
+          {{/* Secret field: type=password, autocomplete="new-password" so the
+               browser never offers to autofill a saved login here, and the value
+               is NEVER rendered back (only whether one is set). A blank
+               submission keeps the current key; type a new one to replace it, or
+               tick "Clear saved key" below to wipe it. */}}
           <input id="llm-api-key" name="api_key" type="password" class="filter-input w-full font-mono"
-                 value="" autocomplete="off" spellcheck="false"
+                 value="" autocomplete="new-password" spellcheck="false"
                  placeholder="{{if .HasAPIKey}}•••••••• (a key is set — leave blank to keep it){{else}}none set — a local proxy needs none{{end}}"
                  {{if .ErrAPIKey}}aria-invalid="true" aria-describedby="llm-api-key-error"{{else}}aria-describedby="llm-api-key-hint"{{end}}>
           {{- if .ErrAPIKey}}
@@ -135,10 +137,24 @@
             {{- if eq .ErrAPIKey "toolong"}}That API key is too long.
             {{- else}}That API key contains characters that are not allowed.{{end}}</p>
           {{- end}}
+          {{- if .HasAPIKey}}
+          <label class="flex items-center gap-2 status-note">
+            <input type="checkbox" name="clear_api_key" value="1"> Clear saved key
+            {{- if .APIKeyFromEnv}} (removes the config-file copy){{else}} (removes it from the config file){{end}}
+          </label>
+          {{- end}}
+          {{- if and .HasAPIKey .APIKeyFromEnv}}
+          <p id="llm-api-key-hint" class="status-note">A key is set via the
+            <code class="font-mono">MSGBROWSE_LLM_API_KEY</code> environment variable. It is used as-is and
+            is <strong>never written to the config file</strong> — saving here leaves the environment the
+            sole home of that secret. Type a value to store one in the config file instead
+            (<code class="font-mono">llm.api_key</code>, mode 0600).</p>
+          {{- else}}
           <p id="llm-api-key-hint" class="status-note">Only needed if your endpoint requires one. Stored in
             this app's config file (<code class="font-mono">llm.api_key</code>, mode 0600); leave blank to
             keep the current key. The <code class="font-mono">MSGBROWSE_LLM_API_KEY</code> environment
-            variable, if set, still overrides it at startup.</p>
+            variable, if set, overrides it at startup and is never persisted here.</p>
+          {{- end}}
         </div>
 
         {{/* Two submit buttons share the form. "Save and apply" posts to the

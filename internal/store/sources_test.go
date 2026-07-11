@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/joestump/msgbrowse/internal/signal"
 	"github.com/joestump/msgbrowse/internal/source"
@@ -143,5 +144,55 @@ func TestDeleteSourceData(t *testing.T) {
 	}
 	if removed != 0 {
 		t.Errorf("second disable removed %d, want 0", removed)
+	}
+}
+
+// TestLastSyncTimesExcludesAllFailedRuns pins the "Last synced" stamp behaviour
+// (review fix): a run that imported nothing AND recorded errors is an all-failed
+// run and must NOT advance the stamp, while a later clean run does. A source
+// whose ONLY run failed reports no last-sync time at all.
+func TestLastSyncTimesExcludesAllFailedRuns(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	mustRun := func(src, started, finished string, msgsTotal, errs int) {
+		t.Helper()
+		ts, err := time.Parse("2006-01-02 15:04:05", started)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fin, err := time.Parse("2006-01-02 15:04:05", finished)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.RecordIngestRun(ctx, IngestRun{
+			Source: src, StartedAt: ts.UTC(), FinishedAt: fin.UTC(),
+			MessagesTotal: msgsTotal, Errors: errs,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Signal: a good run, then a LATER all-failed run (0 messages + errors). The
+	// stamp must stay at the good run, not advance to the failed one.
+	mustRun(source.Signal, "2022-03-01 09:00:00", "2022-03-01 09:00:05", 40, 0)
+	mustRun(source.Signal, "2022-03-02 09:00:00", "2022-03-02 09:00:05", 0, 12)
+	// iMessage: only an all-failed run — no last-sync time at all.
+	mustRun(source.IMessage, "2022-03-03 09:00:00", "2022-03-03 09:00:05", 0, 7)
+	// WhatsApp: a clean no-op (0 messages, 0 errors) still counts as a sync.
+	mustRun(source.WhatsApp, "2022-03-04 09:00:00", "2022-03-04 09:00:05", 0, 0)
+
+	times, err := st.LastSyncTimes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := times[source.Signal]; !ok || !got.Equal(time.Date(2022, 3, 1, 9, 0, 5, 0, time.UTC)) {
+		t.Errorf("signal last sync = %v (ok=%v), want the earlier good run 2022-03-01 09:00:05", got, ok)
+	}
+	if _, ok := times[source.IMessage]; ok {
+		t.Error("imessage should have NO last-sync time (its only run failed)")
+	}
+	if _, ok := times[source.WhatsApp]; !ok {
+		t.Error("whatsapp clean no-op run should count as a sync")
 	}
 }

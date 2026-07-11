@@ -195,6 +195,28 @@ which supersedes [SPEC-0011](../openspec/specs/device-sync/spec.md).
   for security fixes and re-bundle + re-notarize to ship them, as we already do
   for the exporters (ADR-0020).
 
+### Feature gating (`devicesync` build tag)
+
+Device sync is not release-ready, so `msgbrowse serve` is gated behind the
+`devicesync` build tag: the default build wires a no-op seam
+(`internal/cli/serve_nodevicesync.go`), and only `-tags devicesync` compiles the
+real engine wiring (`serve_devicesync.go`). The web UI hides the entire Device
+sync surface when `deviceSyncCompiledIn` is false, and `doctor` reports the
+feature as absent.
+
+**Honest scope of the tag — it gates the runtime, not the dependency graph.**
+`internal/web` imports `internal/devsync` unconditionally (for the
+status/settings/logs types it renders behind the same UI gate), and
+`internal/devsync` imports `internal/syncthing`. So both packages remain in the
+compiled binary regardless of the tag — the tag guarantees no Syncthing process
+ever *starts* and the UI/doctor never expose the feature, **not** that the code
+is absent from the executable. Achieving true binary-level exclusion would
+require build-tagging the web layer's `devsync` references as well; that is
+deferred. Two guards keep a default build honest about this: setting
+`device_sync.enabled: true` on a non-`devicesync` binary logs a startup WARN
+(not a silent no-op) and surfaces a `doctor` WARN with the remedy, rather than
+pretending the switch took effect.
+
 #### Neutral
 
 - **Windows/Linux bundling stays owner-gated**, exactly as with the `.app`

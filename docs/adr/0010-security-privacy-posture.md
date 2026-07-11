@@ -57,9 +57,11 @@ exactly one configurable network egress and no telemetry.**
    (`internal/llm`) is the **only** outbound connection off the local network;
    it defaults to a local LiteLLM proxy (`http://127.0.0.1:4000/v1`) routing to
    a local model, so out of the box no message content leaves the device. There
-   is **no telemetry or analytics**. The LLM API key is env-only
-   (`MSGBROWSE_LLM_API_KEY`, [ADR-0009](0009-config-cli-cobra-viper.md)), never
-   baked into the image or a committed file. Device sync
+   is **no telemetry or analytics**. The LLM API key is supplied via env
+   (`MSGBROWSE_LLM_API_KEY`, [ADR-0009](0009-config-cli-cobra-viper.md)) or, for
+   a desktop user, stored in the mode-`0600` config file through the Settings →
+   LLM tab (ADR-0009 *Amendment*); an env-provided key is never written to disk,
+   and the key is never baked into the image or committed. Device sync
    ([ADR-0018](0018-device-pairing-archive-sync.md), superseded by
    [ADR-0021](0021-syncthing-sync-engine.md)) later added a second, **opt-in**
    network surface: a bundled Syncthing daemon with a non-loopback sync
@@ -126,7 +128,9 @@ exactly one configurable network egress and no telemetry.**
 
 - Keep the default local LiteLLM route; routing to a hosted model must be a
   deliberate `litellm.config.yaml` edit and is documented as off-device.
-- Supply the LLM key via `MSGBROWSE_LLM_API_KEY`; never commit it.
+- Supply the LLM key via `MSGBROWSE_LLM_API_KEY` (recommended for server/Docker)
+  or the Settings → LLM tab (desktop, `0600` config file; an env key always wins
+  and is never persisted). Never commit it.
 - `data_dir` must live outside any user-supplied (read-only) archive root
   (app-managed roots live *inside* `data_dir` by design,
   [ADR-0020](0020-bundled-exporters-guided-setup.md)).

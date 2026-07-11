@@ -230,3 +230,25 @@ func TestDisableRefusedOnSyncedSource(t *testing.T) {
 		t.Fatalf("replica rows deleted despite the conflict guard: %d -> %d", before, got)
 	}
 }
+
+// TestRecheckFragmentKeepsLastSynced is the vanishing-"Last synced" regression
+// (review fix): re-rendering a source's Enabled card as a FRAGMENT (here via
+// /setup/recheck) must carry the "Last synced" line just like the full page —
+// the fragment callers previously dropped it. The managed-root server ingests
+// signal, so it has both an Enabled card and a recorded sync stamp.
+func TestRecheckFragmentKeepsLastSynced(t *testing.T) {
+	srv, _, _ := newManagedRootServer(t)
+	tok := mintToken(t, srv)
+
+	rec := enablePOST(t, srv, "/setup/recheck", selfOrigin, tok, source.Signal)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recheck status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !contains(body, `aria-label="Signal: Enabled"`) {
+		t.Fatalf("recheck did not render the Enabled card:\n%s", body)
+	}
+	if !contains(body, "Last synced ") {
+		t.Errorf("recheck fragment dropped the \"Last synced\" line:\n%s", body)
+	}
+}
