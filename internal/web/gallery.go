@@ -35,6 +35,12 @@ type galleryFileView struct {
 	store.MediaItem
 	SizeHuman   string
 	ContentType string
+	// Missing marks a DB row whose file can't be resolved or isn't on disk in
+	// the archive on this machine (issues #4/#15): the template renders an
+	// inert labeled card instead of a download link — a click on such a link
+	// fetches a 404 under a `download` attribute, which browsers surface as a
+	// silently failed download ("clicking does nothing").
+	Missing bool
 }
 
 // linkGroup is a set of deduplicated links sharing a domain. Total is the
@@ -209,16 +215,17 @@ func parseInt64(s string) int64 {
 }
 
 // decorateFiles stats each file in the read-only archive to add size and type.
-// Files that can't be stat'd (missing/renamed) still render, just without
-// size/type, so the listing never fails on a single bad attachment.
+// Files that can't be stat'd (missing/renamed) still render — flagged Missing,
+// without size/type — so the listing never fails on a single bad attachment.
 func (s *Server) decorateFiles(items []store.MediaItem) []galleryFileView {
 	out := make([]galleryFileView, 0, len(items))
 	for _, it := range items {
-		v := galleryFileView{MediaItem: it}
+		v := galleryFileView{MediaItem: it, Missing: true}
 		if full, ok := s.mediaFilePath(it.Source, it.ConversationName, it.RelPath); ok {
 			if info, err := os.Stat(full); err == nil && !info.IsDir() {
 				v.SizeHuman = humanSize(info.Size())
 				v.ContentType = fileContentType(full)
+				v.Missing = false
 			}
 		}
 		out = append(out, v)

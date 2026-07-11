@@ -1002,6 +1002,24 @@ a.meta-chip:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Missing attachment chip in the transcript (issues #4/#15): the file is
+   absent from the archive on this machine, so the chip is an inert <span> —
+   dimmed, no link-like hover affordance, with the same dashed "missing" tag
+   as the gallery's placeholder tile and file card. */
+.attach-chip-missing {
+  opacity: 0.6;
+}
+.attach-chip-missing:hover {
+  color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+  border-color: var(--color-neutral);
+}
+.attach-chip-missing .ph-tag {
+  flex: none;
+  font-size: 9.5px;
+  padding: 0 0.35rem;
+  border-radius: 5px;
+  border: 1px dashed var(--color-neutral);
+}
 /* Link-preview pill in the accent. */
 .link-pill {
   display: inline-flex;
@@ -1650,6 +1668,34 @@ a.meta-chip:hover {
   padding: 0 0.35rem;
   border-radius: 5px;
   border: 1px solid var(--color-neutral);
+}
+/* Missing-from-archive tile (issue #15): the attachment row exists in the DB
+   but the file is not on disk here. Same striped block as the no-preview
+   placeholder, dimmed and inert — there is nothing to fetch, so it is a <div>,
+   not a link, and the tag border goes dashed to read as "absent". */
+.media-tile-missing {
+  opacity: 0.6;
+  cursor: default;
+}
+.media-tile-missing .ph-tag {
+  border-style: dashed;
+}
+/* Missing file card on the Files tab (issues #4/#15): dimmed inert name —
+   no dead download link — with the same dashed "absent" tag. */
+.media-file-missing {
+  opacity: 0.6;
+}
+/* The inert card must not inherit .media-file-name's link-like hover accent —
+   it isn't clickable, so it keeps the base text color under the pointer. */
+.media-file-name.media-file-missing:hover {
+  color: var(--color-base-content);
+}
+.media-file-missing .ph-tag {
+  font-size: 9.5px;
+  padding: 0 0.35rem;
+  border-radius: 5px;
+  border: 1px dashed var(--color-neutral);
+  vertical-align: middle;
 }
 
 /* Files / links lists re-skinned as slate cards. */

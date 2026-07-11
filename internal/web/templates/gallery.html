@@ -7,8 +7,10 @@
     <main id="main-content" class="flex-1" tabindex="0">
   {{/* Media (REQ-0006-009, brief §5): H1 + Images/Files/Links tabs with count
        badges and an accent underline on the active tab; a filter row; an Images
-       responsive square cover grid with a bottom scrim + mono filename (keeps the
-       imgRenderable placeholder logic and the CSS :target lightbox); Files/Links
+       responsive square cover grid with a bottom scrim + mono filename (tiles
+       branch on the three-state imgTileState — img / no-preview download
+       placeholder / inert missing placeholder — with the CSS :target lightbox);
+       Files/Links
        re-skinned to slate cards (Links grouped by domain). Each tab renders one
        keyset page plus an hx-trigger="revealed" load-more sentinel — the same
        infinite-scroll contract as the transcript (SPEC-0008 REQ-0008-009). */}}
@@ -111,7 +113,8 @@
      download when their lightbox is opened, not with the page. */}}
 {{define "gallery_images_page"}}
   {{- range .Images}}
-  {{- if imgRenderable .Source .ConversationName .RelPath}}
+  {{- $state := imgTileState .Source .ConversationName .RelPath}}
+  {{- if eq $state "img"}}
   <a class="media-tile" href="#lb-{{.ID}}" title="{{.OriginalName}}">
     <img loading="lazy" src="{{mediaURL .ConversationID .RelPath}}" alt="{{.OriginalName}}">
     <span class="media-tile-scrim"><span class="media-tile-name">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span></span>
@@ -125,6 +128,17 @@
       <a class="link-card-title" href="/c/{{.ConversationID}}/at/{{.MessageID}}#m{{.MessageID}}">{{humanName .ConversationName}}</a>
       · <span class="font-mono">{{.TS}}</span> · <span class="source-pill {{sourceSlug .Source}}">{{humanSource .Source}}</span>
     </div>
+  </div>
+  {{- else if eq $state "missing"}}
+  {{/* Attachment row exists but the file is absent from the archive on this
+       machine (issue #15: partial export, moved archive, synced replica
+       without media). An <img> would 404 into the browser's broken-image
+       glyph and a download link would save an error page, so this tile is
+       inert: msgbrowse's own labeled placeholder. */}}
+  <div class="media-tile media-tile-placeholder media-tile-missing" title="{{if .OriginalName}}{{.OriginalName}} — {{end}}not in the archive on this machine">
+    {{template "icon-photo" $}}
+    <span class="ph-name">{{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</span>
+    <span class="ph-tag">missing</span>
   </div>
   {{- else}}
   {{/* Non-web format (e.g. HEIC) with no transcoded derivative: show a
@@ -154,6 +168,14 @@
 {{define "gallery_files_page"}}
   {{- range .Files}}
   <li class="media-list-card">
+    {{- if .Missing}}
+    {{/* The DB row exists but the file is absent from the archive on this
+         machine (issues #4/#15): a download link here fetches a 404 under a
+         `download` attribute, which browsers surface as a silently failed
+         download — i.e. "clicking does nothing". Render an inert labeled
+         card instead. */}}
+    <span class="media-file-name media-file-missing" title="not in the archive on this machine">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}} <span class="ph-tag">missing</span></span>
+    {{- else}}
     {{/* download (issue #161): file cards save the file — the webview never
          navigates to a raw response. hx-boost="false" (issue #4): this anchor
          MUST stay a native browser navigation so the server's
@@ -166,6 +188,7 @@
          (the reported bug). The explicit opt-out makes the download contract
          immune to that, in the initial page and every infinite-scroll page. */}}
     <a class="media-file-name" hx-boost="false" href="{{mediaURL .ConversationID .RelPath}}" download="{{if .OriginalName}}{{.OriginalName}}{{end}}">{{template "icon-document" .}} {{if .OriginalName}}{{.OriginalName}}{{else}}{{.RelPath}}{{end}}</a>
+    {{- end}}
     <div class="media-card-meta">
       {{- if .ContentType}}<span class="font-mono">{{.ContentType}}</span>{{else}}<span class="font-mono">unknown</span>{{end}}
       {{- if .SizeHuman}} · <span class="font-mono">{{.SizeHuman}}</span>{{end}}

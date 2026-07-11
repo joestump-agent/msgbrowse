@@ -110,9 +110,19 @@ func TestRenderBody(t *testing.T) {
 }
 
 func TestMediaURLEscaping(t *testing.T) {
-	got := mediaURL(3, "media/holiday photo.jpg")
-	if got != "/media/3/media/holiday%20photo.jpg" {
-		t.Errorf("mediaURL = %q", got)
+	// Segment-by-segment PathEscape: spaces, '#' (would truncate the request
+	// path as a fragment), '%' (would mis-decode), and unicode must all be
+	// escaped, while '/' separators survive (issue #15 hypothesis 2).
+	tests := map[string]string{
+		"media/holiday photo.jpg": "/media/3/media/holiday%20photo.jpg",
+		"media/pho to #1.jpg":     "/media/3/media/pho%20to%20%231.jpg",
+		"media/100%.jpg":          "/media/3/media/100%25.jpg",
+		"./media/sub dir/ö.png":   "/media/3/media/sub%20dir/%C3%B6.png",
+	}
+	for in, want := range tests {
+		if got := mediaURL(3, in); got != want {
+			t.Errorf("mediaURL(3, %q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
