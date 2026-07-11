@@ -1437,6 +1437,16 @@ a.meta-chip:hover {
   border-color: color-mix(in oklab, var(--color-primary) 50%, transparent);
   background: color-mix(in oklab, var(--color-primary) 10%, transparent);
 }
+/* Disabled chip (the address-book hint when no readable address book is
+   present — issue #12): muted and non-interactive, but the checked state still
+   shows the stored preference so a disabled control is legible, not blank. */
+.toggle-chip:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.toggle-chip input:disabled {
+  cursor: not-allowed;
+}
 /* Solid accent Search button (dark text on accent). */
 .btn-search {
   height: 34px;
