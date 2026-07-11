@@ -127,9 +127,16 @@ func (s *Server) handleSettingsMergeRules(w http.ResponseWriter, r *http.Request
 		rules.UseAddressBook = r.PostFormValue("use_address_book") == "1"
 	} else {
 		// The toggle was disabled and thus not submitted: keep the stored intent.
-		if cur, err := s.store.GetMergeRules(r.Context()); err == nil {
-			rules.UseAddressBook = cur.UseAddressBook
+		// A read failure here must NOT be swallowed — persisting the zero value
+		// would silently clear the user's stored address-book preference — so
+		// treat it as a save failure and re-render the error banner.
+		cur, err := s.store.GetMergeRules(r.Context())
+		if err != nil {
+			s.log.Error("merge rules save failed", "error", err)
+			s.renderContactSettings(w, r, contactSettingsData{RulesResult: "error"})
+			return
 		}
+		rules.UseAddressBook = cur.UseAddressBook
 	}
 	if err := s.store.SetMergeRules(r.Context(), rules); err != nil {
 		s.log.Error("merge rules save failed", "error", err)
