@@ -26,6 +26,7 @@ import (
 
 	"github.com/joestump/msgbrowse/internal/archivepath"
 	"github.com/joestump/msgbrowse/internal/config"
+	"github.com/joestump/msgbrowse/internal/contacts"
 	"github.com/joestump/msgbrowse/internal/devsync"
 	"github.com/joestump/msgbrowse/internal/imageconv"
 	"github.com/joestump/msgbrowse/internal/llm"
@@ -154,6 +155,13 @@ type Server struct {
 	// llmBoot is the boot-time LLM config snapshot (file + defaults merged),
 	// the tab's display fallback when no configurator is wired.
 	llmBoot llm.Settings
+	// addressBook is the pluggable address-book provider behind contact
+	// merging (issue #9): the macOS desktop shell wires a Contacts-backed
+	// contacts.Resolver via SetContactResolver; nil (Linux, browser mode,
+	// unwired shell) reads as contacts.Unavailable{} through
+	// contactResolver(), so consumers never nil-check and the merge path
+	// never errors for "no address book".
+	addressBook contacts.Resolver
 }
 
 // NewServer constructs a Server, parsing templates and wiring routes.

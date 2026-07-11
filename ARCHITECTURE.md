@@ -25,6 +25,7 @@ cmd/msgbrowse-desktop    Wails v2 desktop shell + systray, embedding the same we
     ├── internal/facts   incremental, cited contact-fact extraction (LLM)
     ├── internal/imageconv  transcode HEIC/TIFF → cached JPEG (external converter, ADR-0014)
     ├── internal/archivepath shared, traversal-safe attachment path resolution
+    ├── internal/contacts pluggable address-book Resolver seam + identifier normalization (contact merging)
     ├── internal/setup   source detection + permission probes for guided setup
     ├── internal/onboard(+svc) exporter execution: one-click Enable/Refresh runs (ADR-0020)
     ├── internal/devices device identity: Syncthing device-ID parsing + pairing payloads
