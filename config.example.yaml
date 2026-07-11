@@ -38,13 +38,22 @@ listen_addr: "127.0.0.1:8787"
 llm:
   # The ONLY network egress msgbrowse performs. Default: a local LiteLLM proxy.
   base_url: "http://127.0.0.1:4000/v1"
-  # Leave empty here; set MSGBROWSE_LLM_API_KEY in the environment if your route
-  # needs a key. A local Ollama route needs none.
+  # API key, if your route needs one (a local Ollama/LiteLLM route needs none).
+  # Editable from Settings → LLM, which writes it back here (this file is
+  # gitignored, mode 0600). MSGBROWSE_LLM_API_KEY still overrides it at startup.
   api_key: ""
   chat_model: "local-chat"       # used for RAG synthesis + journal digests
   embed_model: "local-embed"     # used for message embeddings (semantic search)
   max_concurrency: 4
   timeout: "60s"
+
+# In-app message sources ("Providers"). Enabled sources auto-refresh on this
+# cadence — `serve` and the desktop app re-run each source's export + incremental
+# import in the background so the archive stays current without a manual click.
+providers:
+  # How often Enabled sources auto-refresh. Set to 0 to disable auto-refresh
+  # (the per-source manual Refresh control still works). Go duration string.
+  refresh_interval: "6h"
 
 # Vector backend: "sqlite-vec" (default) or "qdrant". The "sqlite-vec" setting
 # is currently served by a pure-Go brute-force cosine scan in the same SQLite
@@ -59,9 +68,12 @@ journal:
   # 0 = no cap on days processed per run.
   max_days_per_run: 0
 
-# Multi-device archive sync (ADR-0021 / SPEC-0014). STRICTLY OPT-IN: with
-# enabled false (or the block absent) no Syncthing process runs and msgbrowse
-# keeps its loopback-only posture. When enabled, msgbrowse supervises a
+# Multi-device archive sync (ADR-0021 / SPEC-0014). NOT COMPILED INTO RELEASE
+# BUILDS: device sync is unfinished and gated behind the `devicesync` build tag
+# (build with `go build -tags devicesync` to include it). Without that tag these
+# keys are inert and the Device sync UI is hidden. STRICTLY OPT-IN even then:
+# with enabled false (or the block absent) no Syncthing process runs and
+# msgbrowse keeps its loopback-only posture. When enabled, msgbrowse supervises a
 # bundled/BYO Syncthing as the transfer engine: its P2P listener is the one
 # socket beyond loopback — mutual TLS with device-ID pinning, both ends must
 # accept a peer — and its config is generated LAN-only by default (global

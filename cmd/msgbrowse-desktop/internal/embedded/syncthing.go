@@ -1,4 +1,10 @@
-// Device-sync wiring for the desktop shell: when device_sync.enabled is true,
+//go:build devicesync
+
+// Device-sync wiring for the desktop shell, compiled ONLY under the `devicesync`
+// build tag (ADR-0021 / SPEC-0014). The feature is not release-ready, so the
+// default desktop build excludes this file — and the internal/devsync +
+// internal/syncthing packages with it; syncthing_stub.go supplies the no-op
+// seam. When device_sync.enabled is true,
 // the embedded server starts the Syncthing supervisor (internal/syncthing)
 // alongside the web UI, resolving the engine binary the ADR-0020 way — from
 // the .app bundle (Contents/Resources/tools/syncthing, version-pinned via
@@ -29,7 +35,45 @@ import (
 	"github.com/joestump/msgbrowse/internal/onboard"
 	"github.com/joestump/msgbrowse/internal/store"
 	"github.com/joestump/msgbrowse/internal/syncthing"
+	"github.com/joestump/msgbrowse/internal/web"
 )
+
+// deviceSyncCompiledIn reports that this desktop binary was built with the
+// device-sync feature; the web UI renders the Device sync surface accordingly.
+const deviceSyncCompiledIn = true
+
+// wireDeviceSync starts the device-sync stack (when device_sync.enabled) and
+// wires its pairing manager, status/roles monitor, and Logs event feed into the
+// web server, returning a handle the embedded server drains on Close. With sync
+// disabled it returns a nil handle. This is the seam embedded.go calls;
+// syncthing_stub.go is the no-op version for builds without the tag.
+func wireDeviceSync(ctx context.Context, srv *web.Server, cfg *config.Config, st *store.Store, runner *onboard.Runner, log *slog.Logger) (deviceSyncHandle, error) {
+	sup, err := startDeviceSync(ctx, cfg, st, runner, log)
+	if err != nil {
+		return nil, err
+	}
+	if sup == nil {
+		return nil, nil
+	}
+	// Wire the /settings pairing section, the status/roles monitor, and the
+	// Logs event feed to the live engine (#158 SPEC-0014 REQ "Status and Doctor
+	// Surfacing").
+	srv.SetPairingSource(sup.Manager)
+	srv.SetSyncMonitor(sup.Manager)
+	srv.SetSyncNotes(sup.Notes.Snapshot)
+	return sup, nil
+}
+
+// Drain waits for the supervised Syncthing child's SIGTERM→grace shutdown AND
+// the folder-watch worker's goroutines, so no orphan process or leaked worker
+// outlives the app (SPEC-0014 "App quit stops the daemon"). It satisfies
+// deviceSyncHandle.
+func (d *deviceSync) Drain() {
+	if serr := d.Sup.Wait(); serr != nil {
+		slog.Error("device-sync supervisor exited with error", "error", serr)
+	}
+	d.Watcher.Wait()
+}
 
 // resolvedSyncthing is the outcome of binary resolution: the path to run,
 // the pinned version to enforce (bundled only; empty for BYO), and whether

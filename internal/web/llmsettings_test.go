@@ -96,12 +96,13 @@ func TestLLMTabRenders(t *testing.T) {
 	if !contains(body, "llm.chat_model") {
 		t.Error("facts-model field missing its llm.chat_model hint")
 	}
-	// NO API-key input — only the env-var hint (config.go posture).
-	for _, forbidden := range []string{`name="api_key"`, `type="password"`} {
-		if contains(body, forbidden) {
-			t.Errorf("LLM tab must not render an API-key field, found %q", forbidden)
+	// The API-key input is present as a write-only password field (Option A).
+	for _, want := range []string{`name="api_key"`, `type="password"`} {
+		if !contains(body, want) {
+			t.Errorf("LLM tab missing the API-key field marker %q", want)
 		}
 	}
+	// The env var is still documented as an override.
 	if !contains(body, "MSGBROWSE_LLM_API_KEY") {
 		t.Error("LLM tab missing the MSGBROWSE_LLM_API_KEY env-var hint")
 	}
@@ -265,11 +266,12 @@ func TestLLMSaveValidationRejections(t *testing.T) {
 	}
 }
 
-// TestLLMSaveHappyPathWritesExactlyThreeKeys drives the REAL stack — handler
-// → llm.Applier → config.SaveLLM → llm.Holder — against a pre-existing config
-// file: exactly the three llm keys are written, the unrelated pre-existing
-// key survives, and the live holder swaps (#191's no-restart contract).
-func TestLLMSaveHappyPathWritesExactlyThreeKeys(t *testing.T) {
+// TestLLMSaveHappyPathWritesKeys drives the REAL stack — handler → llm.Applier
+// → config.SaveLLM → llm.Holder — against a pre-existing config file: the llm
+// keys (base URL, both models, AND the submitted api_key, Option A) are
+// written, the unrelated pre-existing key survives, and the live holder swaps
+// with the new key (#191's no-restart contract).
+func TestLLMSaveHappyPathWritesKeys(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -279,8 +281,8 @@ func TestLLMSaveHappyPathWritesExactlyThreeKeys(t *testing.T) {
 	holder := llm.NewHolder(llm.New(llm.Options{BaseURL: "http://old.test/v1"}), llm.Settings{
 		BaseURL: "http://old.test/v1", EmbedModel: "old-embed", ChatModel: "old-chat",
 	})
-	srv.SetLLMConfig(llm.NewApplier(holder, "", 0, func(s llm.Settings) error {
-		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel)
+	srv.SetLLMConfig(llm.NewApplier(holder, 0, func(s llm.Settings) error {
+		return config.SaveLLM(path, s.BaseURL, s.EmbedModel, s.ChatModel, s.APIKey)
 	}))
 
 	tok := mintToken(t, srv)
@@ -288,6 +290,7 @@ func TestLLMSaveHappyPathWritesExactlyThreeKeys(t *testing.T) {
 		"base_url":    "  http://127.0.0.1:11434/v1  ", // trimmed
 		"embed_model": "nomic-embed-text",
 		"facts_model": "llama3",
+		"api_key":     "sk-test-key-123",
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
@@ -296,17 +299,21 @@ func TestLLMSaveHappyPathWritesExactlyThreeKeys(t *testing.T) {
 	if !contains(body, "LLM settings saved.") {
 		t.Error("missing the saved confirmation")
 	}
-	// The re-rendered form shows the now-effective (trimmed) values.
+	// The re-rendered form shows the now-effective (trimmed) values...
 	if !contains(body, `value="http://127.0.0.1:11434/v1"`) {
 		t.Error("saved render missing the trimmed effective base URL")
 	}
+	// ...but NEVER the secret key value.
+	if contains(body, "sk-test-key-123") {
+		t.Error("the API key value must never be rendered back into the page")
+	}
 
-	// Live swap: the holder now reports the new settings.
-	if got := holder.Settings(); got.BaseURL != "http://127.0.0.1:11434/v1" || got.EmbedModel != "nomic-embed-text" || got.ChatModel != "llama3" {
+	// Live swap: the holder now reports the new settings, including the key.
+	if got := holder.Settings(); got.BaseURL != "http://127.0.0.1:11434/v1" || got.EmbedModel != "nomic-embed-text" || got.ChatModel != "llama3" || got.APIKey != "sk-test-key-123" {
 		t.Errorf("holder after save = %+v", got)
 	}
 
-	// The file: three keys written, unrelated keys preserved, no api_key.
+	// The file: llm keys (incl. api_key) written, unrelated keys preserved.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -316,15 +323,13 @@ func TestLLMSaveHappyPathWritesExactlyThreeKeys(t *testing.T) {
 		"base_url: http://127.0.0.1:11434/v1",
 		"embed_model: nomic-embed-text",
 		"chat_model: llama3",
+		"api_key: sk-test-key-123",
 		"data_dir: /custom/data", // unrelated top-level key preserved
 		"max_concurrency: 9",     // unrelated llm key preserved
 	} {
 		if !contains(out, want) {
 			t.Errorf("config file missing %q:\n%s", want, out)
 		}
-	}
-	if contains(out, "api_key") {
-		t.Errorf("config file gained an api_key:\n%s", out)
 	}
 }
 

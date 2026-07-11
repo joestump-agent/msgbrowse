@@ -1,3 +1,5 @@
+//go:build devicesync
+
 // Headless tests for the desktop shell's Syncthing binary resolution: bundled
 // resolution from a faked .app (never $PATH), the typed error on a bundle
 // missing its engine or version pin, and the BYO fallback for the non-bundled

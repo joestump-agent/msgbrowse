@@ -103,6 +103,10 @@ type settingsData struct {
 	// enable-instructions state, true without a payload renders the
 	// engine-not-ready state.
 	DeviceSyncEnabled bool
+	// DeviceSyncFeature gates the entire Device sync section: false (the default
+	// release build, feature not compiled in behind the `devicesync` tag) omits
+	// it wholesale so the settings page carries no dead surface.
+	DeviceSyncFeature bool
 	// Pairing is non-nil while the sync engine is running and has reported
 	// its device ID.
 	Pairing *settingsPairing
@@ -210,6 +214,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		MCPConfigJSON:     mcp.ClientConfigJSON(endpoint),
 		MCPAddCommand:     mcp.ClaudeMCPAddCommand(endpoint),
 		DeviceSyncEnabled: s.deviceSyncEnabled,
+		DeviceSyncFeature: s.deviceSyncFeature,
 	}
 	if pr := r.URL.Query().Get("pair"); pairResultStates[pr] {
 		data.PairResult = pr

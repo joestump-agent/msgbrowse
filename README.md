@@ -366,7 +366,7 @@ flags. See [`config.example.yaml`](config.example.yaml) and the
 | `data_dir` | `MSGBROWSE_DATA_DIR` | `./data` | writable DB/embeddings dir |
 | `listen_addr` | `MSGBROWSE_LISTEN_ADDR` | `127.0.0.1:8787` | loopback by default |
 | `llm.base_url` | `MSGBROWSE_LLM_BASE_URL` | `http://127.0.0.1:4000/v1` | the only internet egress |
-| `llm.api_key` | `MSGBROWSE_LLM_API_KEY` | — | env/secret only; never commit |
+| `llm.api_key` | `MSGBROWSE_LLM_API_KEY` | — | env wins; settable in Settings → LLM (0600 config file); never commit |
 | `llm.chat_model` | `MSGBROWSE_LLM_CHAT_MODEL` | `local-chat` | RAG + digests |
 | `llm.embed_model` | `MSGBROWSE_LLM_EMBED_MODEL` | `local-embed` | embeddings |
 | `vector_backend` | `MSGBROWSE_VECTOR_BACKEND` | `sqlite-vec` | brute-force today (ADR-0002) |

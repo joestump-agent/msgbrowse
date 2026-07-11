@@ -71,7 +71,7 @@ func TestApplierPersistsThenSwaps(t *testing.T) {
 	h := NewHolder(markerClient{marker: 1}, Settings{BaseURL: "http://old.invalid/v1", EmbedModel: "old-embed"})
 
 	var persisted []Settings
-	a := NewApplier(h, "", 0, func(s Settings) error {
+	a := NewApplier(h, 0, func(s Settings) error {
 		persisted = append(persisted, s)
 		return nil
 	})
@@ -97,7 +97,7 @@ func TestApplierPersistsThenSwaps(t *testing.T) {
 func TestApplierPersistFailureLeavesHolderUntouched(t *testing.T) {
 	before := Settings{BaseURL: "http://old.invalid/v1", EmbedModel: "old-embed"}
 	h := NewHolder(markerClient{marker: 1}, before)
-	a := NewApplier(h, "", 0, func(Settings) error { return errors.New("disk full") })
+	a := NewApplier(h, 0, func(Settings) error { return errors.New("disk full") })
 
 	err := a.ApplyLLM(Settings{BaseURL: "http://new.invalid/v1"})
 	if err == nil {

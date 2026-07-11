@@ -1,3 +1,5 @@
+//go:build devicesync
+
 // CLI tests for the rebuilt `msgbrowse devices` namespace (ADR-0021): the
 // read-only `devices list` over the paired_devices registry — empty state,
 // seeded rows through a REAL store, and the error path. The pairing flow

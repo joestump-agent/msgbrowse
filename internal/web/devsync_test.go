@@ -125,22 +125,18 @@ func TestEnableConflictOnSyncedSource(t *testing.T) {
 	}
 }
 
-// TestRefreshAllSkipsSyncedSources: the all-sources Refresh never fans out to
-// a replica's synced-in source.
-func TestRefreshAllSkipsSyncedSources(t *testing.T) {
+// TestAutoRefreshSkipsSyncedSources: the auto-refresh scheduler core never fans
+// out to a replica's synced-in source.
+func TestAutoRefreshSkipsSyncedSources(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	srv.SetSyncMonitor(replicaMonitor())
 	enabler := &fakeEnabler{}
 	srv.SetEnabler(enabler)
-	tok := mintToken(t, srv)
 
-	rec := refreshAllPOST(t, srv, selfOrigin, tok)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("refresh-all = %d", rec.Code)
-	}
+	srv.refreshEnabledSources(context.Background())
 	for _, src := range enabler.refreshedSources() {
 		if src == "signal" {
-			t.Error("refresh-all ran the exporter pipeline for a synced-in source")
+			t.Error("auto-refresh ran the exporter pipeline for a synced-in source")
 		}
 	}
 }
@@ -350,6 +346,7 @@ func TestStatusPageDeviceSyncCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.SetDeviceSyncFeature(true)
 	srv.SetSyncMonitor(&fakeMonitor{status: &devsync.Status{
 		Running: true,
 		Peers: []devsync.PeerStatus{
@@ -396,6 +393,7 @@ func TestStatusPageDeviceSyncAbsentStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv2.SetDeviceSyncFeature(true)
 	body = get(t, srv2, "/status").Body.String()
 	if !contains(body, "its state is unavailable") {
 		t.Error("enabled-but-unreadable state missing")

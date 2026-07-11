@@ -1,11 +1,10 @@
 package web
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -136,8 +135,8 @@ func TestRefreshNoEnablerUnavailable(t *testing.T) {
 }
 
 // configuredServer builds a Server whose three sources are all Enabled (each has a
-// configured managed archive root), so /setup renders three Enabled cards and the
-// all-sources Refresh control, and sourceConfigured reports true for each.
+// configured managed archive root), so /setup renders three Enabled cards and
+// sourceConfigured reports true for each.
 func configuredServer(t *testing.T) *Server {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "empty.sqlite"))
@@ -158,87 +157,36 @@ func configuredServer(t *testing.T) *Server {
 	return srv
 }
 
-// refreshAllPOST posts /setup/refresh-all with the given origin + token (no
-// source — the all-sources route carries none).
-func refreshAllPOST(t *testing.T, srv *Server, origin, token string) *httptest.ResponseRecorder {
-	t.Helper()
-	form := url.Values{}
-	if token != "" {
-		form.Set(setupTokenField, token)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/setup/refresh-all", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if origin != "" {
-		req.Header.Set("Origin", origin)
-	}
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
-	return rec
-}
+// The one-shot "Refresh all sources" HTTP endpoint was retired in favor of the
+// background auto-refresh scheduler; its selection logic now lives in
+// refreshEnabledSources, exercised directly below (no request, no gate).
 
-// TestRefreshAllCrossOriginRejected: the all-sources route carries the same gate
-// — a cross-origin POST is 403 and starts no jobs.
-func TestRefreshAllCrossOriginRejected(t *testing.T) {
+// TestRefreshEnabledSourcesRunsEach: with all three sources Enabled, one refresh
+// is started per DISTINCT source — exactly one each, never a duplicate.
+func TestRefreshEnabledSourcesRunsEach(t *testing.T) {
 	srv := configuredServer(t)
 	fe := &fakeEnabler{}
 	srv.SetEnabler(fe)
 
-	tok := mintToken(t, srv)
-	rec := refreshAllPOST(t, srv, "http://evil.example", tok)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("cross-origin refresh-all status = %d, want 403", rec.Code)
-	}
-	if fe.refreshCount() != 0 {
-		t.Fatalf("cross-origin refresh-all started %d jobs, want 0", fe.refreshCount())
-	}
-}
-
-// TestRefreshAllMissingTokenRejected: no token is 403 and starts nothing.
-func TestRefreshAllMissingTokenRejected(t *testing.T) {
-	srv := configuredServer(t)
-	fe := &fakeEnabler{}
-	srv.SetEnabler(fe)
-
-	rec := refreshAllPOST(t, srv, selfOrigin, "")
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("missing-token refresh-all status = %d, want 403", rec.Code)
-	}
-	if fe.refreshCount() != 0 {
-		t.Fatalf("missing-token refresh-all started %d jobs, want 0", fe.refreshCount())
-	}
-}
-
-// TestRefreshAllRunsEachEnabledSource is the SPEC-0013 acceptance for the
-// all-sources control: with all three sources Enabled, one refresh is started per
-// DISTINCT source — exactly one each, never a duplicate for the same source.
-func TestRefreshAllRunsEachEnabledSource(t *testing.T) {
-	srv := configuredServer(t)
-	fe := &fakeEnabler{}
-	srv.SetEnabler(fe)
-
-	tok := mintToken(t, srv)
-	rec := refreshAllPOST(t, srv, selfOrigin, tok)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("refresh-all status = %d, want 200", rec.Code)
+	started := srv.refreshEnabledSources(context.Background())
+	if started != len(source.All) {
+		t.Fatalf("refreshEnabledSources started %d jobs, want %d (one per enabled source)", started, len(source.All))
 	}
 	if fe.refreshCount() != int32(len(source.All)) {
-		t.Fatalf("refresh-all started %d jobs, want %d (one per enabled source)", fe.refreshCount(), len(source.All))
+		t.Fatalf("enabler saw %d refresh calls, want %d", fe.refreshCount(), len(source.All))
 	}
 	got := fe.refreshedSources()
 	sort.Strings(got)
 	want := append([]string(nil), source.All...)
 	sort.Strings(want)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("refresh-all refreshed %v, want each of %v exactly once", got, want)
-	}
-	if !contains(rec.Body.String(), "Refreshing 3 sources") {
-		t.Errorf("refresh-all summary missing the started count; got %q", rec.Body.String())
+		t.Fatalf("refreshed %v, want each of %v exactly once", got, want)
 	}
 }
 
-// TestRefreshAllOnlyEnabledSources: a source that is NOT Enabled (no configured
-// archive root) is skipped by the all-sources fan-out.
-func TestRefreshAllOnlyEnabledSources(t *testing.T) {
+// TestRefreshEnabledSourcesOnlyEnabled: a source that is NOT Enabled (no
+// configured archive root) is skipped.
+func TestRefreshEnabledSourcesOnlyEnabled(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "empty.sqlite"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -253,27 +201,33 @@ func TestRefreshAllOnlyEnabledSources(t *testing.T) {
 	fe := &fakeEnabler{}
 	srv.SetEnabler(fe)
 
-	tok := mintToken(t, srv)
-	rec := refreshAllPOST(t, srv, selfOrigin, tok)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("refresh-all status = %d, want 200", rec.Code)
+	if started := srv.refreshEnabledSources(context.Background()); started != 1 {
+		t.Fatalf("refreshEnabledSources started %d jobs, want 1", started)
 	}
 	if got := fe.refreshedSources(); len(got) != 1 || got[0] != source.Signal {
-		t.Fatalf("refresh-all refreshed %v, want only [signal]", got)
+		t.Fatalf("refreshed %v, want only [signal]", got)
 	}
 }
 
-// TestSetupPageRendersAllSourcesRefreshWhenEnabled: the /setup page renders the
-// all-sources Refresh control (and per-Enabled-card Refresh buttons) only when at
-// least one source is Enabled.
-func TestSetupPageRendersAllSourcesRefreshWhenEnabled(t *testing.T) {
+// TestRefreshEnabledSourcesNoEnabler: with no Enabler wired, the scheduler core
+// starts nothing rather than panicking.
+func TestRefreshEnabledSourcesNoEnabler(t *testing.T) {
+	srv := configuredServer(t) // no SetEnabler
+	if started := srv.refreshEnabledSources(context.Background()); started != 0 {
+		t.Fatalf("refreshEnabledSources with no enabler started %d jobs, want 0", started)
+	}
+}
+
+// TestSetupPageRendersPerSourceRefreshWhenEnabled: an Enabled card still renders
+// its own per-source Refresh control (the all-sources button is gone).
+func TestSetupPageRendersPerSourceRefreshWhenEnabled(t *testing.T) {
 	srv := configuredServer(t)
 	fe := &fakeEnabler{}
 	srv.SetEnabler(fe)
 
 	body := get(t, srv, "/providers").Body.String()
-	if !contains(body, `hx-post="/setup/refresh-all"`) {
-		t.Error("/setup with an Enabled source should render the all-sources Refresh control")
+	if contains(body, `hx-post="/setup/refresh-all"`) {
+		t.Error("/setup should no longer render the retired all-sources Refresh control")
 	}
 	if !contains(body, `hx-post="/setup/refresh"`) {
 		t.Error("/setup Enabled card should render a per-source Refresh control")
@@ -283,15 +237,12 @@ func TestSetupPageRendersAllSourcesRefreshWhenEnabled(t *testing.T) {
 	}
 }
 
-// TestSetupPageHidesRefreshWhenNoneEnabled: with no source Enabled, neither the
-// all-sources control nor a per-source Refresh renders.
+// TestSetupPageHidesRefreshWhenNoneEnabled: with no source Enabled, no per-source
+// Refresh renders.
 func TestSetupPageHidesRefreshWhenNoneEnabled(t *testing.T) {
 	srv := newEmptyStoreServer(t)
 	srv.SetDetector(detectorFor(signalPlusIMessageHome(t), false))
 	body := get(t, srv, "/providers").Body.String()
-	if contains(body, `hx-post="/setup/refresh-all"`) {
-		t.Error("/setup with no Enabled source should NOT render the all-sources Refresh control")
-	}
 	if contains(body, `hx-post="/setup/refresh"`) {
 		t.Error("/setup with no Enabled source should NOT render a per-source Refresh control")
 	}

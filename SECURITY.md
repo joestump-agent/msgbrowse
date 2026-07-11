@@ -48,8 +48,10 @@ sends raw media off-device. The default local route keeps it on the machine.
   **never** sent to any LLM, for any feature.
 - Keep the default local LiteLLM route. Routing to a hosted provider must be a
   deliberate edit to `litellm.config.yaml` and is documented as off-device.
-- The API key is read from `MSGBROWSE_LLM_API_KEY` (env/secret) only and is never
-  baked into the image or expected in a committed file.
+- The API key is never baked into the image. It comes from `MSGBROWSE_LLM_API_KEY`
+  (env/secret, which always wins at startup) or from the Settings → LLM tab, which
+  persists it to the local `0600` config file. That file lives outside version
+  control — never commit it.
 
 ## Archive integrity
 

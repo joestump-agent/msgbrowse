@@ -100,7 +100,11 @@
          manual code carry this node's PUBLIC Syncthing device ID + folder
          introduction — never a secret. Pairing is symmetric explicit-accept:
          each node pastes/scans the OTHER node's code, and no archive data
-         flows until both have (SPEC-0014 §Trust Model). */}}
+         flows until both have (SPEC-0014 §Trust Model).
+
+         The whole section is gated on DeviceSyncFeature — the `devicesync` build
+         tag. Release builds omit the feature, so nothing here renders. */}}
+    {{- if .DeviceSyncFeature}}
     <section class="status-card space-y-4" aria-labelledby="settings-pairing-heading">
       <h2 id="settings-pairing-heading" class="status-card-title">Device sync</h2>
       {{- if .UnpairResult}}
@@ -306,6 +310,7 @@
       </div>
       {{- end}}
     </section>
+    {{- end}}
   </div>
     </main>
 {{end}}

@@ -1,13 +1,14 @@
-// Save-back for the Settings → LLM tab (#191): persist EXACTLY the three
-// user-editable llm keys into the YAML config file, touching nothing else.
+// Save-back for the Settings → LLM tab (#191): persist the user-editable llm
+// keys into the YAML config file, touching nothing else.
 //
 // The write is a surgical merge, never a dump: the existing file is parsed
-// into a generic map, only llm.base_url / llm.embed_model / llm.chat_model
-// are set, and every other key — including a pre-existing llm.api_key, which
-// this code never writes — round-trips unchanged. A missing file is created
-// containing only the llm block, so the built-in defaults stay defaults
-// instead of being frozen into the file. The write is atomic (temp file +
-// rename, 0600) so a crash mid-save can never leave a truncated config.
+// into a generic map, only llm.base_url / llm.embed_model / llm.chat_model /
+// llm.api_key are set, and every other key round-trips unchanged. A missing
+// file is created containing only the llm block, so the built-in defaults
+// stay defaults instead of being frozen into the file. The write is atomic
+// (temp file + rename, 0600) so a crash mid-save can never leave a truncated
+// config — and that 0600 mode is why the config file is an acceptable home
+// for the key under ADR-0010's loopback single-user trust.
 package config
 
 import (
@@ -18,12 +19,12 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
-// SaveLLM merges the three user-configurable LLM keys into the YAML config
-// file at path, creating the file (and its directory) if absent. It writes
-// ONLY llm.base_url, llm.embed_model, and llm.chat_model; unrelated keys and
-// any existing llm.api_key are preserved verbatim, and no api_key is ever
-// written (the MSGBROWSE_LLM_API_KEY env var is the supported key channel).
-func SaveLLM(path, baseURL, embedModel, chatModel string) error {
+// SaveLLM merges the user-configurable LLM keys into the YAML config file at
+// path, creating the file (and its directory) if absent. It writes
+// llm.base_url, llm.embed_model, llm.chat_model, and llm.api_key; unrelated
+// keys round-trip verbatim. An empty apiKey is written as an empty value
+// (clearing any previous key), so the tab's field is the source of truth.
+func SaveLLM(path, baseURL, embedModel, chatModel, apiKey string) error {
 	doc := map[string]any{}
 	b, err := os.ReadFile(path)
 	switch {
@@ -47,6 +48,7 @@ func SaveLLM(path, baseURL, embedModel, chatModel string) error {
 	llmBlock["base_url"] = baseURL
 	llmBlock["embed_model"] = embedModel
 	llmBlock["chat_model"] = chatModel
+	llmBlock["api_key"] = apiKey
 	doc["llm"] = llmBlock
 
 	out, err := yaml.Marshal(doc)

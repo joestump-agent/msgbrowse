@@ -46,48 +46,25 @@
     <p class="screen-sub">msgbrowse looks for Signal, iMessage, and WhatsApp on this Mac. Enable a
       detected source to import its history — everything stays on this machine.</p>
 
-    {{/* One card per source (SPEC-0013 "one card per source"), as a labelled list
-         so assistive tech enumerates the sources. Each card renders via the shared
-         setup_card define so /setup/recheck can re-render a single card fragment. */}}
+    {{/* One card per source (SPEC-0013 "one card per source") laid out as a 2×2
+         grid, plus a "coming soon" card for sources not yet importable (Telegram).
+         Still a labelled list so assistive tech enumerates the sources; each real
+         card renders via the shared setup_card define so /setup/recheck can
+         re-render a single card fragment. */}}
     <ul class="setup-cards" aria-label="Message sources">
       {{- range .Cards}}
       {{- template "setup_card" .}}
       {{- end}}
+      {{- template "setup_coming_soon_card" "Telegram"}}
     </ul>
 
-    {{/* All-sources Refresh (SPEC-0013 REQ "Refresh"): one control that refreshes
-         every Enabled source. Rendered only when at least one source is Enabled.
-         It POSTs /setup/refresh-all (same-origin + token gate, identical to the
-         per-source POSTs); the Runner's per-source job model starts one job per
-         distinct Enabled source, so it can never spawn two concurrent jobs for the
-         same source. Each source's own aria-live region reports its live state;
-         the summary lands in this control's own aria-live region. */}}
-    {{- if .AnyEnabled}}
-    <div class="setup-refresh-all">
-      {{- if .EnableAvailable}}
-      <button type="button" class="setup-btn"
-              hx-post="/setup/refresh-all"
-              hx-headers='{"X-Setup-Token": "{{.Token}}"}'
-              hx-target="#setup-refresh-all-result"
-              hx-swap="innerHTML"
-              hx-disabled-elt="this">Refresh all sources</button>
-      {{- else}}
-      <button type="button" class="setup-btn" disabled aria-disabled="true"
-              title="Refreshing needs the desktop app with its bundled exporters, or a configured exporter path">Refresh all sources</button>
-      {{- end}}
-      <p id="setup-refresh-all-result" class="setup-refresh-all-result" role="status" aria-live="polite"></p>
-    </div>
-    {{- end}}
-
-    {{/* Footer copy keyed on the page's real state (issue #162: the old
-         two-way condition showed "No sources are ready to enable" while every
-         card read Enabled): actionable → nudge; everything-enabled → status;
-         only when nothing is actionable AND nothing is enabled → the true
-         empty state. */}}
+    {{/* Footer copy keyed on the page's real state. Enabled sources now
+         auto-refresh on a schedule (providers.refresh_interval), so the copy
+         says so instead of pointing at the retired "Refresh all sources"
+         button; the per-source Refresh icon stays for an on-demand import. */}}
     <p class="setup-footnote">
       {{- if .AnyActionable}}Detected sources can be enabled from here — enabling runs the bundled exporter and imports the result. Providers stays reachable from Settings at any time.
-      {{- else if .AnyEnabled}}All detected sources are enabled. Refresh a source to import what's new. Providers stays reachable from Settings at any time.
-      {{- else}}No sources are ready to enable on this machine yet. Providers stays reachable from Settings at any time.{{end}}
+      {{- else}}Enabled sources refresh automatically to import what's new; use a source's Refresh icon for an on-demand import. Providers stays reachable from Settings at any time.{{end}}
     </p>
   </div>
     </main>
@@ -131,6 +108,9 @@
             {{- if .HasCounts}}
             <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{num .Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{num .Messages}} message{{if ne .Messages 1}}s{{end}}</span>
             {{- end}}
+            {{- if .HasLastSynced}}
+            <span class="setup-note">Last synced {{.LastSynced}}</span>
+            {{- end}}
             <span class="setup-note">Synced from {{.SyncedFrom}}. Enable and Refresh run on that device; to make this machine the importer, unpair it in Settings first.</span>
           {{- else if .ConfirmDisable}}
             {{/* Inline two-step Disable confirmation (issue #162): step 1 swapped
@@ -161,6 +141,12 @@
             <span class="setup-note setup-note-ok">{{template "icon-check" $}} {{num .Conversations}} conversation{{if ne .Conversations 1}}s{{end}} · {{num .Messages}} message{{if ne .Messages 1}}s{{end}}</span>
             {{- else}}
             <span class="setup-note setup-note-ok">{{template "icon-check" $}} Imported</span>
+            {{- end}}
+            {{- if .HasLastSynced}}
+            {{/* Auto-refresh + manual Refresh both record an ingest run; this is
+                 the most recent one, so the user can see how current the archive
+                 is. Server-formatted, never request-derived. */}}
+            <span class="setup-note">Last synced {{.LastSynced}}</span>
             {{- end}}
             {{/* Disable (issue #162): privileged POST behind the same gate as
                  Enable; the first click swaps in the inline confirm above. */}}
@@ -353,19 +339,22 @@
   {{- end}}
 {{end}}
 
-{{/* setup_refresh_all_result is the summary fragment the all-sources Refresh POST
-     swaps into its aria-live region. It reports how many sources it kicked off —
-     the per-source live state is announced by each card's own progress region, so
-     this stays a short count-only summary. All values are server-computed counts,
-     so html/template escaping is the only encoding needed. */}}
-{{define "setup_refresh_all_result"}}
-  {{- if .Unavailable}}
-  <span class="setup-progress-unavailable">Refreshing needs the desktop app (bundled exporters) or a configured exporter path.</span>
-  {{- else if .None}}
-  <span>No enabled sources to refresh.</span>
-  {{- else}}
-  <span>Refreshing {{.Started}} source{{if ne .Started 1}}s{{end}}
-    {{- if .AlreadyRunning}} · {{.AlreadyRunning}} already in progress{{end}}
-    {{- if .Failed}} · {{.Failed}} could not start{{end}} — see each source below for progress.</span>
-  {{- end}}
+{{/* setup_coming_soon_card is a non-interactive placeholder card for a source
+     msgbrowse does not import yet (Telegram). It has no state badge actions, no
+     Enable/Refresh, and is not wired into internal/source — it only advertises
+     that support is planned so the 2×2 grid reads as complete. The argument is
+     the source's display name (a fixed template literal, never request-derived).
+     Marked aria-disabled and dimmed, with the state carried as the "Coming soon"
+     badge text (not color alone — SPEC-0013 §Accessibility). */}}
+{{define "setup_coming_soon_card"}}
+      <li class="setup-card setup-card-coming-soon" aria-label="{{.}}: coming soon" aria-disabled="true">
+        <span class="setup-card-icon src-telegram" aria-hidden="true">{{template "icon-send" .}}</span>
+        <div class="setup-card-body min-w-0">
+          <div class="setup-card-head">
+            <span class="setup-card-title">{{.}}</span>
+            <span class="setup-badge setup-badge-coming-soon">Coming soon</span>
+          </div>
+          <p class="setup-card-detail">{{.}} import is on the way — this source can't be enabled yet.</p>
+        </div>
+      </li>
 {{end}}

@@ -1,3 +1,5 @@
+//go:build devicesync
+
 // doctor device-sync rows (#158; SPEC-0014 REQ "Status and Doctor
 // Surfacing"): each health state — disabled, engine down, healthy, syncing,
 // paused, errored, peers connected/disconnected — must come out as its own

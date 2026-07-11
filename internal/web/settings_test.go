@@ -194,6 +194,43 @@ func TestSettingsDeviceSyncDisabledState(t *testing.T) {
 	}
 }
 
+// TestSettingsDeviceSyncFeatureGated: with the device-sync feature NOT compiled
+// in (the default release build, DeviceSyncFeature=false), the entire Device
+// sync section is absent from /settings — no heading, no enable instructions, no
+// pairing form — so an unfinished feature ships no visible surface.
+func TestSettingsDeviceSyncFeatureGated(t *testing.T) {
+	st, cfg, _ := newTestStoreAndConfig(t)
+	srv, err := NewServer(st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	// Feature flag left false (its zero value) — the release-build default.
+	body := get(t, srv, "/settings").Body.String()
+	if contains(body, "Device sync") {
+		t.Error("Device sync section rendered while the feature is gated off")
+	}
+	if contains(body, "settings-pairing-heading") {
+		t.Error("pairing section markup present while the feature is gated off")
+	}
+	if !contains(body, "MCP server") {
+		t.Error("MCP section missing — the settings page must still render its other content")
+	}
+}
+
+// TestStatusDeviceSyncFeatureGated: with the feature gated off, /status omits the
+// Device sync card entirely (not even the "off" neutral line).
+func TestStatusDeviceSyncFeatureGated(t *testing.T) {
+	st, cfg, _ := newTestStoreAndConfig(t)
+	srv, err := NewServer(st, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	body := get(t, srv, "/status").Body.String()
+	if contains(body, "Device sync") {
+		t.Error("Device sync card rendered on /status while the feature is gated off")
+	}
+}
+
 // TestSettingsEnabledNoEngineState: device_sync.enabled=true with no pairing
 // source answering (engine not up) renders the engine-absent state, QR-free.
 func TestSettingsEnabledNoEngineState(t *testing.T) {
@@ -203,6 +240,7 @@ func TestSettingsEnabledNoEngineState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	srv.SetDeviceSyncFeature(true)
 	body := get(t, srv, "/settings").Body.String()
 	if !contains(body, "The sync engine is not running.") {
 		t.Error("enabled-without-engine state missing its explanatory text")
@@ -228,6 +266,7 @@ func TestSettingsQRRendersDeviceID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	srv.SetDeviceSyncFeature(true)
 	payload := testPayload(t)
 	srv.SetPairingSource(&staticPairing{p: payload})
 
@@ -302,6 +341,7 @@ func TestSettingsPairedDevicesList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	srv.SetDeviceSyncFeature(true)
 	src := &staticPairing{p: testPayload(t)}
 	srv.SetPairingSource(src)
 

@@ -63,6 +63,7 @@ type Store interface {
 	ListSnapshots(ctx context.Context) ([]store.Snapshot, error)
 	SourcesPresent(ctx context.Context) ([]string, error)
 	SourceCounts(ctx context.Context) (map[string]store.SourceCount, error)
+	LastSyncTimes(ctx context.Context) (map[string]time.Time, error)
 	DeleteSourceData(ctx context.Context, src string) (int64, error)
 }
 
@@ -93,6 +94,13 @@ type Server struct {
 	// deviceSyncEnabled mirrors config device_sync.enabled for the /settings
 	// pairing section's absent state (SPEC-0010; payload contract SPEC-0011).
 	deviceSyncEnabled bool
+	// deviceSyncFeature reports whether the device-sync feature is compiled into
+	// this binary at all — a COMPILE-TIME flag the shell sets from a
+	// build-tagged constant (SetDeviceSyncFeature). Device sync is gated behind
+	// the `devicesync` build tag and NOT built by default, so a release binary
+	// hides the entire Device sync surface on /settings and /status. False (the
+	// default) renders those sections as if the feature did not exist.
+	deviceSyncFeature bool
 	// pairing is the live pairing source for /settings' QR section and the
 	// pair/unpair POSTs; nil until serve / the desktop shell wires
 	// SetPairingSource.
@@ -178,6 +186,7 @@ func NewServer(st Store, cfg *config.Config, log *slog.Logger) (*Server, error) 
 			BaseURL:    cfg.LLM.BaseURL,
 			EmbedModel: cfg.LLM.EmbedModel,
 			ChatModel:  cfg.LLM.ChatModel,
+			APIKey:     cfg.LLM.APIKey,
 		},
 	}
 	tmpl, err := template.New("").Funcs(template.FuncMap{
@@ -260,6 +269,14 @@ func (s *Server) Handler() http.Handler { return s.mux }
 // it is the desktop shell at construction time and says so once.
 func (s *Server) SetDesktopChrome(enabled bool) { s.desktopChrome = enabled }
 
+// SetDeviceSyncFeature records whether the device-sync feature is compiled into
+// this binary (the `devicesync` build tag). The shell passes a build-tagged
+// constant; with the feature absent — the default release build — the
+// /settings and /status device-sync sections do not render at all, so an
+// unfinished feature never ships a visible-but-dead surface. Call before
+// serving; the flag is read-only afterwards.
+func (s *Server) SetDeviceSyncFeature(enabled bool) { s.deviceSyncFeature = enabled }
+
 // SetShellNotes wires the desktop shell's diagnostics snapshot (issue #167:
 // systray/dock startup must be observable on the Logs page, not silent).
 // fn is called per /logs render and must be safe for concurrent use; the
@@ -307,7 +324,6 @@ func (s *Server) routes() http.Handler {
 	// handler by the same-origin + per-session-token check before any work.
 	mux.HandleFunc("POST /setup/enable", s.handleSetupEnable)
 	mux.HandleFunc("POST /setup/refresh", s.handleSetupRefresh)
-	mux.HandleFunc("POST /setup/refresh-all", s.handleSetupRefreshAll)
 	mux.HandleFunc("POST /setup/cancel", s.handleSetupCancel)
 	mux.HandleFunc("POST /setup/recheck", s.handleSetupRecheck)
 	mux.HandleFunc("POST /setup/disable", s.handleSetupDisable)

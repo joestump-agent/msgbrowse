@@ -52,6 +52,12 @@ func newTestServer(t *testing.T) (*Server, *store.Store, string) {
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	// The device-sync surface is gated behind the compile-time feature flag
+	// (the `devicesync` build tag). The tagged build that supplies the engine
+	// also enables it; enable it here so the shared helper exercises the
+	// feature-present behavior the device-sync tests assert. The dedicated
+	// feature-OFF tests set the flag false explicitly.
+	srv.SetDeviceSyncFeature(true)
 	return srv, st, archive
 }
 
