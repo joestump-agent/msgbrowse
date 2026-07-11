@@ -3,7 +3,10 @@
 # --- build stage ---
 # msgbrowse uses the pure-Go modernc.org/sqlite driver (FTS5 built in), so the
 # build needs no C toolchain — just the Go image.
-FROM golang:1.25-bookworm AS build
+# The official golang images set GOTOOLCHAIN=local, which would silently ignore
+# the go.mod toolchain directive — pin the exact patch so the shipped image gets
+# stdlib security fixes (see GO-2026-5856).
+FROM golang:1.25.12-bookworm AS build
 
 WORKDIR /src
 
