@@ -206,6 +206,7 @@ func NewServer(st Store, cfg *config.Config, log *slog.Logger) (*Server, error) 
 		"sourceSlug":       sourceSlug,
 		"humanSource":      source.Label,
 		"imgRenderable":    s.imgRenderable,
+		"imgTileState":     s.imgTileState,
 		"convRowCtx":       convRowCtx,
 		"galleryConvURL":   galleryConvURL,
 	}).ParseFS(templatesFS, "templates/*.html")
@@ -233,27 +234,68 @@ func (s *Server) archiveRoots() archivepath.Roots {
 	return setup.EffectiveRoots(&s.rootsCfg)
 }
 
-// imgRenderable reports whether an image attachment will actually display in an
-// <img>: either a web-native format, or a non-web format (HEIC/TIFF) that has a
-// transcoded JPEG derivative on disk. Templates use it to render a placeholder
-// instead of a broken image.
-func (s *Server) imgRenderable(src, convName, relPath string) bool {
-	if imageconv.WebRenderable(relPath) {
-		return true
-	}
-	if !imageconv.Convertible(relPath) {
-		return false
-	}
+// Image-tile states for the media grid and the transcript thumbnails
+// (issue #15). The strings are what imgTileState hands to the templates.
+const (
+	tileImg       = "img"       // will actually display in an <img>
+	tileNoPreview = "nopreview" // on disk but not browser-renderable: download placeholder
+	tileMissing   = "missing"   // absent from the archive on this machine (or unresolvable)
+)
+
+// imgTileState classifies an image attachment for rendering (issue #15):
+//
+//   - tileImg: the <img> src will succeed — a web-native format whose file is
+//     on disk, or a non-web format (HEIC/TIFF) whose transcoded JPEG
+//     derivative is on disk (the media handler serves the derivative).
+//   - tileNoPreview: the original is on disk but no browser-renderable
+//     rendition exists (e.g. an un-transcoded HEIC) — templates render a
+//     download placeholder.
+//   - tileMissing: the attachment row exists in the DB but the file can't be
+//     resolved (source not configured, traversal) or isn't on disk (partial
+//     export, moved archive, synced replica without media). Templates render
+//     an inert labeled placeholder — an <img> would 404 into the browser's
+//     broken-image glyph.
+//
+// The existence check is a stat per tile (plus one for the derivative on
+// convertible formats). That is the same per-item cost decorateFiles already
+// pays on the Files tab, and microseconds against the SPEC-0008 render
+// budgets — the alternative is emitting <img> tags that fail at request time.
+func (s *Server) imgTileState(src, convName, relPath string) string {
 	abs, ok := s.mediaFilePath(src, convName, relPath)
-	if !ok {
-		return false
+	if imageconv.Convertible(relPath) {
+		// Non-web format: renderable only through its transcoded derivative.
+		if !ok {
+			return tileMissing
+		}
+		if d := imageconv.DerivedPath(s.derivedDir, abs); d != "" && statIsFile(d) {
+			return tileImg
+		}
+		if statIsFile(abs) {
+			return tileNoPreview
+		}
+		return tileMissing
 	}
-	d := imageconv.DerivedPath(s.derivedDir, abs)
-	if d == "" {
-		return false
+	if !ok || !statIsFile(abs) {
+		return tileMissing
 	}
-	_, err := os.Stat(d)
-	return err == nil
+	if imageconv.WebRenderable(relPath) {
+		return tileImg
+	}
+	return tileNoPreview
+}
+
+// imgRenderable reports whether an image attachment will actually display in an
+// <img>. Kept as the boolean the transcript templates branch on; the gallery
+// uses the finer-grained imgTileState.
+func (s *Server) imgRenderable(src, convName, relPath string) bool {
+	return s.imgTileState(src, convName, relPath) == tileImg
+}
+
+// statIsFile reports whether path exists and is a regular-ish file (not a
+// directory) — the same predicate handleMedia applies before serving.
+func statIsFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // Handler returns the root http.Handler (security headers already applied).

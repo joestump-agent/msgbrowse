@@ -1554,6 +1554,29 @@ a.meta-chip:hover {
   border-radius: 5px;
   border: 1px solid var(--color-neutral);
 }
+/* Missing-from-archive tile (issue #15): the attachment row exists in the DB
+   but the file is not on disk here. Same striped block as the no-preview
+   placeholder, dimmed and inert — there is nothing to fetch, so it is a <div>,
+   not a link, and the tag border goes dashed to read as "absent". */
+.media-tile-missing {
+  opacity: 0.6;
+  cursor: default;
+}
+.media-tile-missing .ph-tag {
+  border-style: dashed;
+}
+/* Missing file card on the Files tab (issues #4/#15): dimmed inert name —
+   no dead download link — with the same dashed "absent" tag. */
+.media-file-missing {
+  opacity: 0.6;
+}
+.media-file-missing .ph-tag {
+  font-size: 9.5px;
+  padding: 0 0.35rem;
+  border-radius: 5px;
+  border: 1px dashed var(--color-neutral);
+  vertical-align: middle;
+}
 
 /* Files / links lists re-skinned as slate cards. */
 .media-list {
