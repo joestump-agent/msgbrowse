@@ -19,9 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # check-latest so builds pick up Go patch releases (stdlib security
+      # fixes land there — see security.yml) instead of the runner's cache.
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          check-latest: true
           cache: true
 
       # make check runs gofmt -l, go vet, and go test — no build tag needed.
