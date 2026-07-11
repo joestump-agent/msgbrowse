@@ -297,7 +297,8 @@
       {{- if .Attachments}}
       <div class="msg-attachments">
         {{- range $ai, $att := .Attachments}}
-          {{- if and (eq $att.Kind "image") (imgRenderable $.Source $.ConvName $att.RelPath)}}
+          {{- $tstate := imgTileState $.Source $.ConvName $att.RelPath}}
+          {{- if and (eq $att.Kind "image") (eq $tstate "img")}}
           {{/* Renderable image: the thumbnail opens the same pure-CSS :target
                lightbox the Media tab uses (gallery.html gallery_images_page),
                keyed to the overlay emitted just after this row (issue #3). The
@@ -307,6 +308,13 @@
           <a class="msg-thumb" href="#lb-m{{$msgID}}-{{$ai}}">
             <img class="thumb" loading="lazy" src="{{mediaURL $.ActiveID $att.RelPath}}" alt="{{$att.OriginalName}}">
           </a>
+          {{- else if eq $tstate "missing"}}
+          {{/* The attachment row exists but the file is absent from the archive
+               on this machine (issues #4/#15): a download anchor here would
+               fetch a 404 under the `download` attribute, which browsers
+               surface as a silently failed download — "clicking does nothing".
+               Same inert labeled treatment as the gallery's missing tile/card. */}}
+          <span class="attach-chip attach-chip-missing" title="not in the archive on this machine">{{if eq $att.Kind "image"}}{{template "icon-photo" $}}{{else}}{{template "icon-paperclip" $}}{{end}}<span class="font-mono">{{if $att.OriginalName}}{{$att.OriginalName}}{{else}}{{$att.RelPath}}{{end}}</span><span class="ph-tag">missing</span></span>
           {{- else}}
           {{/* Files, and images with no browser-renderable rendition (e.g. an
                un-transcoded HEIC), render as a labeled attachment chip:

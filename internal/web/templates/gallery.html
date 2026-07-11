@@ -7,8 +7,10 @@
     <main id="main-content" class="flex-1" tabindex="0">
   {{/* Media (REQ-0006-009, brief §5): H1 + Images/Files/Links tabs with count
        badges and an accent underline on the active tab; a filter row; an Images
-       responsive square cover grid with a bottom scrim + mono filename (keeps the
-       imgRenderable placeholder logic and the CSS :target lightbox); Files/Links
+       responsive square cover grid with a bottom scrim + mono filename (tiles
+       branch on the three-state imgTileState — img / no-preview download
+       placeholder / inert missing placeholder — with the CSS :target lightbox);
+       Files/Links
        re-skinned to slate cards (Links grouped by domain). Each tab renders one
        keyset page plus an hx-trigger="revealed" load-more sentinel — the same
        infinite-scroll contract as the transcript (SPEC-0008 REQ-0008-009). */}}

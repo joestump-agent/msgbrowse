@@ -149,8 +149,11 @@ func TestGalleryMissingImagePlaceholder(t *testing.T) {
 }
 
 // TestTranscriptMissingImageNoBrokenImg pins the same fix at the transcript
-// layer, which branches on imgRenderable: a DB-only image renders the labeled
-// attachment chip, not an <img> thumbnail destined to 404.
+// layer, which branches on imgTileState: a DB-only image renders the inert,
+// labeled missing placeholder — not an <img> thumbnail destined to 404, and
+// not a download anchor whose click fetches a 404 (a silently failed download,
+// the issue #4 "clicking does nothing"). Same graceful degradation the gallery
+// applies (TestGalleryMissingImagePlaceholder / TestGalleryFilesMissingInert).
 func TestTranscriptMissingImageNoBrokenImg(t *testing.T) {
 	srv, convID := newMediaFixtureServer(t,
 		map[string][]byte{"Media/real.jpg": []byte("\xff\xd8\xff\xdbfake-jpeg")},
@@ -167,8 +170,13 @@ func TestTranscriptMissingImageNoBrokenImg(t *testing.T) {
 			t.Errorf("transcript rendered missing file as <img src=%q>", src)
 		}
 	}
-	if !regexp.MustCompile(`<a class="attach-chip"[^>]*ghost\.jpg`).MatchString(body) {
-		t.Error("transcript missing-image did not fall back to the attachment chip")
+	// The absent image renders the inert, labeled placeholder — never a link,
+	// so a click can't fetch a 404.
+	if regexp.MustCompile(`<a[^>]*ghost\.jpg`).MatchString(body) {
+		t.Error("transcript rendered missing image as a link (a click would fetch a 404)")
+	}
+	if !contains(body, "attach-chip-missing") || !contains(body, `<span class="ph-tag">missing</span>`) {
+		t.Error("transcript missing-image did not render the inert labeled placeholder")
 	}
 	if !contains(body, "real.jpg") {
 		t.Error("transcript lost the present image")
