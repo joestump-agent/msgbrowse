@@ -363,6 +363,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /c/{id}/messages", s.handleMessages)
 	mux.HandleFunc("GET /c/{id}/at/{mid}", s.handleConversationAt)
 	mux.HandleFunc("GET /status", s.handleStatus)
+	// The Backups tab (issue #2): the encrypted-DB-snapshot inventory, moved out
+	// of /status into its own Settings-shell section. A safe GET, no mutation.
+	mux.HandleFunc("GET /backups", s.handleBackups)
 	// The Setup surface is presented to the user as "Providers" (its route is
 	// /providers); /setup 301-redirects for compatibility with any existing links
 	// or bookmarks. The privileged POSTs keep the /setup/* prefix — they are

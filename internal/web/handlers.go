@@ -173,16 +173,7 @@ type statusData struct {
 	baseData
 	ConversationCount int // stat-strip count; independent of the sidebar listing (REQ-0008-006)
 	Run               *store.IngestRun
-	Snapshots         []store.Snapshot
 	NewestTS          string
-	SnapshotFootprint int64
-	// HasSnapshotPipeline gates the Encrypted-DB-snapshots card (issue #164):
-	// on a desktop-onboarded machine there IS no snapshot pipeline (that flow
-	// is the Cowork/launchd Signal export), so "0 B across 0 snapshots … No
-	// snapshots found" read like a failure. True when snapshots are recorded or
-	// the signal archive carries a .snapshots directory; false renders one
-	// neutral line instead of the card.
-	HasSnapshotPipeline bool
 	// DeviceSyncEnabled mirrors config device_sync.enabled for the Device
 	// sync card's disabled state; Sync is the live snapshot (nil when sync is
 	// disabled, no monitor is wired, or the registry read failed) — SPEC-0014
@@ -527,31 +518,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	snaps, err := s.store.ListSnapshots(ctx)
-	if err != nil {
-		s.serverError(w, err)
-		return
-	}
 	newest, err := s.store.NewestMessageTS(ctx)
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
-	var footprint int64
-	for _, sn := range snaps {
-		footprint += sn.SizeBytes
-	}
 	s.render(w, r, "status", statusData{
-		baseData:            base,
-		ConversationCount:   convCount,
-		Run:                 run,
-		Snapshots:           snaps,
-		NewestTS:            newest,
-		SnapshotFootprint:   footprint,
-		HasSnapshotPipeline: len(snaps) > 0 || s.signalSnapshotsDirExists(),
-		DeviceSyncEnabled:   s.deviceSyncEnabled,
-		DeviceSyncFeature:   s.deviceSyncFeature,
-		Sync:                s.syncStatusSnapshot(ctx),
+		baseData:          base,
+		ConversationCount: convCount,
+		Run:               run,
+		NewestTS:          newest,
+		DeviceSyncEnabled: s.deviceSyncEnabled,
+		DeviceSyncFeature: s.deviceSyncFeature,
+		Sync:              s.syncStatusSnapshot(ctx),
 	})
 }
 

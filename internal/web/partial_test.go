@@ -83,6 +83,7 @@ func pageRoutes(t *testing.T, st *store.Store) []string {
 		"/search",
 		"/gallery",
 		"/status",
+		"/backups",
 		"/providers",
 		"/logs",
 		"/settings",
