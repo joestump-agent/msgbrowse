@@ -2,9 +2,10 @@
 // that loads it from (in increasing order of precedence) built-in defaults, a
 // YAML config file, MSGBROWSE_* environment variables, and command-line flags.
 //
-// Secrets (notably the LLM API key) are never read from the config file in a way
-// that would encourage committing them; prefer the MSGBROWSE_LLM_API_KEY
-// environment variable. See SECURITY.md for the egress and secret-handling model.
+// Secrets (notably the LLM API key) may be persisted to the 0600 config file by
+// the Settings → LLM tab (SaveLLM); the MSGBROWSE_LLM_API_KEY environment
+// variable always takes precedence at startup. The config file must never be
+// committed. See SECURITY.md for the egress and secret-handling model.
 package config
 
 import (
