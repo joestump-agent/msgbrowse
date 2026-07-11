@@ -46,9 +46,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # check-latest matters here: stdlib vulnerabilities are fixed in patch
+      # releases (e.g. GO-2026-5856 fixed in 1.25.12), so scanning with the
+      # runner's cached older patch would keep reporting fixed vulns — or worse,
+      # miss that the build toolchain needs bumping.
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          check-latest: true
           cache: true
           cache-dependency-path: |
             go.sum
