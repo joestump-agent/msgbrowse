@@ -1,8 +1,30 @@
 # ADR-0009: Configuration & CLI — Cobra (commands) + Viper (config)
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-07-11 — see *Amendment*)
 - **Date:** 2026-06-27
 - **Relates to:** [ADR-0003](0003-dual-source-archive.md) (per-source archive roots), [ADR-0010](0010-security-privacy-posture.md) (secrets via env)
+
+## Amendment (2026-07-11): the LLM API key may be stored in the config file
+
+The Settings → LLM tab (issue #191) lets a **desktop** user edit the LLM API
+key in the UI and persists it to the config file. This softens the original
+"secrets never live in the config file" rule to a narrower one:
+
+- **The key may live in the config file when the user puts it there** — a
+  desktop user has no convenient shell to export `MSGBROWSE_LLM_API_KEY`, and the
+  file is written mode `0600` under [ADR-0010](0010-security-privacy-posture.md)'s
+  loopback single-user trust. The tab shows only whether a key is set (never the
+  value), a blank field keeps the current key, and an explicit *Clear* control
+  wipes it.
+- **An env-provided key is still env-only.** When `MSGBROWSE_LLM_API_KEY` is set
+  it overrides the file at boot (unchanged precedence) *and* is never written back
+  to the config file — saving the tab suppresses the on-disk copy so an
+  env-scoped secret cannot leak onto disk (`internal/cli/common.go`
+  `newLLMApplier`, `llm.Settings.APIKeyFromEnv`). Deployments that inject the key
+  via env keep exactly the old posture.
+- **Committing the key is still discouraged.** The file remains the *local* app
+  config, not a committed one; `SECURITY.md` and [ADR-0010](0010-security-privacy-posture.md)
+  keep the "don't commit a real key" guidance.
 
 ## Context
 
@@ -49,10 +71,13 @@ defaults < config.yaml < `MSGBROWSE_*` env < flags.**
    [ADR-0016](0016-whatsapp-source-exporter.md)) — are separate config
    keys/flags ([ADR-0003](0003-dual-source-archive.md)), each with its own
    `errorHint` when mis-pointed.
-6. **Secrets via env only.** `LLMConfig.APIKey` has a default of `""` and the
-   `config` package docstring directs users to `MSGBROWSE_LLM_API_KEY` rather than
-   the YAML file, so a key is never encouraged into a committed file
-   ([ADR-0010](0010-security-privacy-posture.md), SECURITY.md).
+6. **Secrets via env (or the 0600 config file the user chose).**
+   `LLMConfig.APIKey` still defaults to `""` and env injection
+   (`MSGBROWSE_LLM_API_KEY`) remains the recommended path for server/Docker
+   deployments. As of the *Amendment* above, a desktop user may also store the
+   key in the mode-`0600` config file via the Settings → LLM tab; an env-provided
+   key is never persisted there. The key is never committed by default and the UI
+   never renders it back.
 7. **Validation up front.** `config.Validate` rejects an invalid
    `vector_backend`, an invalid `log_level`, and an empty `data_dir` before any
    command does work.
@@ -102,8 +127,11 @@ defaults < config.yaml < `MSGBROWSE_*` env < flags.**
   subcommands, help, and layered precedence that Cobra+Viper provide.
 - **Flags only (no config file).** Rejected: a long-lived `serve`/journal setup
   wants a stable `config.yaml`; flags alone are unwieldy for many keys.
-- **Secrets in the config file.** Rejected: invites committing an API key; env-only
-  keeps secrets out of git and matches the egress model in SECURITY.md.
+- **Secrets in the config file (as the only mechanism).** Rejected: env injection
+  stays the recommended path for server/Docker so a key need never touch disk. The
+  *Amendment* adds config-file storage as an **opt-in desktop convenience** (mode
+  `0600`, env still wins and is never persisted), not a replacement — committing a
+  real key remains discouraged and matches the egress model in SECURITY.md.
 
 ## References
 

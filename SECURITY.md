@@ -61,7 +61,10 @@ sends raw media off-device. The default local route keeps it on the machine.
 - The API key is never baked into the image. It comes from `MSGBROWSE_LLM_API_KEY`
   (env/secret, which always wins at startup) or from the Settings → LLM tab, which
   persists it to the local `0600` config file. That file lives outside version
-  control — never commit it.
+  control — never commit it. A key supplied via the environment is used but
+  **never written back to the config file** — saving the tab suppresses the
+  on-disk copy — so an env-scoped secret cannot leak onto disk. The tab never
+  renders the key back and offers an explicit *Clear* control to remove it.
 
 ## Archive integrity
 

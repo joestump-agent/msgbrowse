@@ -1,12 +1,16 @@
-// The Settings → LLM tab (issue #191, stage A): the user-facing surface for
-// the AI endpoint — base URL, embed model, and "Facts model" (llm.chat_model;
-// the facts feature consumes it today, the journal digest later). Exactly
-// three fields, and deliberately NO API-key field: per internal/config's
-// posture, endpoints that require a key read it from the MSGBROWSE_LLM_API_KEY
-// environment variable, so a key never round-trips through a form or the
-// config file. Saving applies LIVE — the wired LLMConfigurator persists the
-// three keys into the loaded config file and swaps the process's llm.Holder,
-// so the MCP server's semantic search uses the new endpoint with no restart.
+// The Settings → LLM tab (issue #191): the user-facing surface for the AI
+// endpoint — base URL, embed model, "Facts model" (llm.chat_model; the facts
+// feature consumes it today, the journal digest later), and the API key. The
+// key is editable here and persisted to the 0600 config file (Option A — a
+// desktop user has no convenient env var; ADR-0010's loopback single-user
+// trust). Two exceptions keep the secret honest: a key supplied via
+// MSGBROWSE_LLM_API_KEY is used but NEVER written back to disk (it stays in the
+// environment it was scoped to), and the field itself is a password input whose
+// value is never echoed — a blank field means "keep the current key", and an
+// explicit Clear checkbox wipes it. Saving applies LIVE — the wired
+// LLMConfigurator persists the keys into the loaded config file and swaps the
+// process's llm.Holder, so the MCP server's semantic search uses the new
+// endpoint with no restart.
 //
 // The save POST is privileged (it changes the app's single network egress,
 // ADR-0010) and is gated exactly like the Setup POSTs: same-origin +
@@ -66,6 +70,10 @@ type llmSettingsData struct {
 	// a "key is set" placeholder without ever rendering the secret. The key
 	// value is NEVER echoed into the form (a blank field means "keep it").
 	HasAPIKey bool
+	// APIKeyFromEnv reports the current key came from MSGBROWSE_LLM_API_KEY, so
+	// the template can label it "set via environment" and note that saving will
+	// not write it to the config file. Only meaningful when HasAPIKey is true.
+	APIKeyFromEnv bool
 	// SetupToken is the per-session token the form submits through the same
 	// checkSetupPOST gate the Setup POSTs use.
 	SetupToken string
@@ -101,10 +109,11 @@ func (s *Server) currentLLM() llm.Settings {
 func (s *Server) handleSettingsLLM(w http.ResponseWriter, r *http.Request) {
 	cur := s.currentLLM()
 	s.renderLLMSettings(w, r, llmSettingsData{
-		BaseURL:    cur.BaseURL,
-		EmbedModel: cur.EmbedModel,
-		FactsModel: cur.ChatModel,
-		HasAPIKey:  cur.APIKey != "",
+		BaseURL:       cur.BaseURL,
+		EmbedModel:    cur.EmbedModel,
+		FactsModel:    cur.ChatModel,
+		HasAPIKey:     cur.APIKey != "",
+		APIKeyFromEnv: cur.APIKeyFromEnv,
 	})
 }
 
@@ -122,18 +131,31 @@ func (s *Server) handleSettingsLLMSave(w http.ResponseWriter, r *http.Request) {
 	// The API key is a password field we never echo, so a BLANK field means
 	// "keep the current key" — only a non-blank value changes it (the standard
 	// secret-field UX; it also means the form can't accidentally wipe a key on
-	// an unrelated save). The effective key is resolved against the live value.
-	apiKey := strings.TrimSpace(r.PostFormValue("api_key"))
-	keptKey := apiKey == ""
-	if keptKey {
-		apiKey = s.currentLLM().APIKey
+	// an unrelated save). The "Clear saved key" checkbox is the explicit wipe.
+	// The effective key (and its provenance) is resolved against the live value.
+	cur := s.currentLLM()
+	clearKey := r.PostFormValue("clear_api_key") != ""
+	typedKey := strings.TrimSpace(r.PostFormValue("api_key"))
+	apiKey := typedKey
+	fromEnv := false
+	keptKey := false
+	switch {
+	case clearKey:
+		apiKey = "" // explicit wipe wins over any typed/kept value
+	case typedKey == "":
+		// Blank and not clearing: keep the current key, preserving its
+		// provenance so an env-provided key still isn't persisted to disk.
+		apiKey = cur.APIKey
+		fromEnv = cur.APIKeyFromEnv
+		keptKey = true
 	}
 
 	data := llmSettingsData{
-		BaseURL:    strings.TrimSpace(r.PostFormValue("base_url")),
-		EmbedModel: strings.TrimSpace(r.PostFormValue("embed_model")),
-		FactsModel: strings.TrimSpace(r.PostFormValue("facts_model")),
-		HasAPIKey:  apiKey != "",
+		BaseURL:       strings.TrimSpace(r.PostFormValue("base_url")),
+		EmbedModel:    strings.TrimSpace(r.PostFormValue("embed_model")),
+		FactsModel:    strings.TrimSpace(r.PostFormValue("facts_model")),
+		HasAPIKey:     apiKey != "",
+		APIKeyFromEnv: fromEnv,
 	}
 	data.ErrBaseURL = validateLLMBaseURL(data.BaseURL)
 	data.ErrEmbedModel = validateLLMModel(data.EmbedModel)
@@ -150,10 +172,11 @@ func (s *Server) handleSettingsLLMSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.llmConfig.ApplyLLM(llm.Settings{
-		BaseURL:    data.BaseURL,
-		EmbedModel: data.EmbedModel,
-		ChatModel:  data.FactsModel,
-		APIKey:     apiKey,
+		BaseURL:       data.BaseURL,
+		EmbedModel:    data.EmbedModel,
+		ChatModel:     data.FactsModel,
+		APIKey:        apiKey,
+		APIKeyFromEnv: fromEnv,
 	}); err != nil {
 		s.log.Error("LLM settings save failed", "error", err)
 		data.SaveResult = "error"
@@ -167,13 +190,14 @@ func (s *Server) handleSettingsLLMSave(w http.ResponseWriter, r *http.Request) {
 		"base_url", data.BaseURL, "embed_model", data.EmbedModel, "chat_model", data.FactsModel,
 		"api_key_set", apiKey != "", "api_key_changed", !keptKey)
 
-	cur := s.llmConfig.CurrentLLM()
+	applied := s.llmConfig.CurrentLLM()
 	s.renderLLMSettings(w, r, llmSettingsData{
-		BaseURL:    cur.BaseURL,
-		EmbedModel: cur.EmbedModel,
-		FactsModel: cur.ChatModel,
-		HasAPIKey:  cur.APIKey != "",
-		SaveResult: "ok",
+		BaseURL:       applied.BaseURL,
+		EmbedModel:    applied.EmbedModel,
+		FactsModel:    applied.ChatModel,
+		HasAPIKey:     applied.APIKey != "",
+		APIKeyFromEnv: applied.APIKeyFromEnv,
+		SaveResult:    "ok",
 	})
 }
 

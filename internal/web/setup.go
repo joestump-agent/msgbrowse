@@ -147,6 +147,11 @@ type setupData struct {
 	// so the intro can nudge the user toward an action (vs. a pure returning-user
 	// view where everything is Enabled/Not-detected).
 	AnyActionable bool
+	// AnyEnabled is true when at least one source is Enabled or Synced — the
+	// signal that the "enabled sources auto-refresh" footer copy actually applies.
+	// Without it, a machine with NOTHING detected would still claim its enabled
+	// sources refresh automatically (issue #162 footer regression).
+	AnyEnabled bool
 	// EnableAvailable reports whether an Enabler is wired (desktop bundle or a
 	// configured $PATH resolver): true renders live Enable buttons, false renders
 	// the "desktop app required / configure tools" affordance (SPEC-0013).
@@ -189,15 +194,20 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	cards := s.setupCards(r.Context(), token)
 	anyActionable := false
+	anyEnabled := false
 	for _, c := range cards {
 		if c.Actionable {
 			anyActionable = true
+		}
+		if c.State == setupStateEnabled || c.State == setupStateSynced {
+			anyEnabled = true
 		}
 	}
 	s.render(w, r, "setup", setupData{
 		baseData:        base,
 		Cards:           cards,
 		AnyActionable:   anyActionable,
+		AnyEnabled:      anyEnabled,
 		EnableAvailable: s.enableAvailable(),
 		Token:           token,
 	})
@@ -226,12 +236,7 @@ func (s *Server) setupCards(ctx context.Context, token string) []setupCard {
 	lastSync := s.lastSyncTimes(ctx)
 	cards := make([]setupCard, 0, len(source.All))
 	for _, src := range source.All {
-		card := s.setupCardFor(det, src, token, present, counts, replicas)
-		if t, ok := lastSync[src]; ok {
-			card.LastSynced = t.Local().Format("2006-01-02 15:04")
-			card.HasLastSynced = true
-		}
-		cards = append(cards, card)
+		cards = append(cards, s.setupCardFor(det, src, token, present, counts, replicas, lastSync))
 	}
 	return cards
 }
@@ -259,12 +264,20 @@ func (s *Server) lastSyncTimes(ctx context.Context) map[string]time.Time {
 // while its live OS-permission probe would still report Needed. counts is the
 // per-source imported footprint (issue #162), shown on Enabled cards; a nil map
 // (store error) degrades to the plain Imported note.
-func (s *Server) setupCardFor(det setup.Detector, src, token string, present map[string]bool, counts map[string]store.SourceCount, replicas map[string]devsync.ReplicaOf) setupCard {
+func (s *Server) setupCardFor(det setup.Detector, src, token string, present map[string]bool, counts map[string]store.SourceCount, replicas map[string]devsync.ReplicaOf, lastSync map[string]time.Time) setupCard {
 	card := setupCard{
 		Source:          src,
 		Label:           source.Label(src),
 		EnableAvailable: s.enableAvailable(),
 		Token:           token,
+	}
+	// The "Last synced" line rides on EVERY render path — full page and the
+	// Enable/Recheck/Disable fragment swaps — so it never vanishes when a card
+	// is replaced out from under the page (the fragment callers previously
+	// omitted it). The template only shows it on Enabled/Synced cards.
+	if t, ok := lastSync[src]; ok {
+		card.LastSynced = t.Local().Format("2006-01-02 15:04")
+		card.HasLastSynced = true
 	}
 
 	// The synced-replica state wins over everything (#158; SPEC-0014 REQ

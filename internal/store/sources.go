@@ -11,14 +11,24 @@ import (
 	"time"
 )
 
-// LastSyncTimes returns the most recent successful ingest time per source —
+// LastSyncTimes returns the most recent SUCCESSFUL ingest time per source —
 // the "Last synced" stamp the Providers cards show (auto-refresh and manual
 // Refresh both record an ingest_runs row on completion). Keyed by source id;
-// sources that have never completed a run are absent. finished_at is stored as
-// RFC3339 UTC, so MAX() over the column is a correct chronological pick.
+// sources that have never completed a successful run are absent. finished_at is
+// stored as RFC3339 UTC, so MAX() over the column is a correct chronological
+// pick.
+//
+// A run that imported nothing AND recorded errors (messages_total = 0 AND
+// errors > 0) is an all-failed run — a lost permission, an empty/corrupt
+// export — and is excluded so the stamp reflects the last time the archive
+// actually came through, not the last time a broken run merely finished. A
+// clean no-op (0 messages, 0 errors) still counts: it means "checked, nothing
+// new" and is a legitimate sync.
 func (s *Store) LastSyncTimes(ctx context.Context) (map[string]time.Time, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT source, MAX(finished_at) FROM ingest_runs GROUP BY source`)
+		`SELECT source, MAX(finished_at) FROM ingest_runs
+		 WHERE NOT (messages_total = 0 AND errors > 0)
+		 GROUP BY source`)
 	if err != nil {
 		return nil, fmt.Errorf("last sync times: %w", err)
 	}

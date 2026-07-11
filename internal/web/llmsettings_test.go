@@ -394,3 +394,94 @@ func TestLLMSaveApplyErrorReported(t *testing.T) {
 		t.Error("rendered success despite an apply error")
 	}
 }
+
+// TestLLMSaveBlankKeepsConfigKey: a blank api_key field with a config-sourced
+// key set keeps the current key and applies it with APIKeyFromEnv=false (it is
+// legitimately stored in config, Option A).
+func TestLLMSaveBlankKeepsConfigKey(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{cur: llm.Settings{
+		BaseURL: "http://old/v1", APIKey: "sk-in-config", APIKeyFromEnv: false,
+	}}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	rec := llmPOST(t, srv, selfOrigin, tok, validLLMForm()) // no api_key field
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if len(fc.applied) != 1 {
+		t.Fatalf("applied %d, want 1", len(fc.applied))
+	}
+	if got := fc.applied[0]; got.APIKey != "sk-in-config" || got.APIKeyFromEnv {
+		t.Errorf("applied = %+v, want kept config key with APIKeyFromEnv=false", got)
+	}
+}
+
+// TestLLMSaveBlankKeepsEnvKeyUnpersisted is the env-key-leak regression: when
+// the current key came from MSGBROWSE_LLM_API_KEY (APIKeyFromEnv=true), a blank
+// save keeps it LIVE but carries the env flag through so the persist layer
+// never writes the env secret to the config file.
+func TestLLMSaveBlankKeepsEnvKeyUnpersisted(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{cur: llm.Settings{
+		BaseURL: "http://old/v1", APIKey: "sk-from-env", APIKeyFromEnv: true,
+	}}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	rec := llmPOST(t, srv, selfOrigin, tok, validLLMForm()) // no api_key field
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if len(fc.applied) != 1 {
+		t.Fatalf("applied %d, want 1", len(fc.applied))
+	}
+	got := fc.applied[0]
+	if got.APIKey != "sk-from-env" {
+		t.Errorf("live key = %q, want the env key kept for the live client", got.APIKey)
+	}
+	if !got.APIKeyFromEnv {
+		t.Error("APIKeyFromEnv must stay true so persist suppresses the on-disk copy")
+	}
+}
+
+// TestLLMSaveTypedKeyOverridesEnv: typing a key when the current one is
+// env-sourced flips APIKeyFromEnv off — the user chose to store it (Option A),
+// so it must now persist.
+func TestLLMSaveTypedKeyOverridesEnv(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{cur: llm.Settings{APIKey: "sk-from-env", APIKeyFromEnv: true}}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	form := validLLMForm()
+	form["api_key"] = "sk-typed-in-tab"
+	rec := llmPOST(t, srv, selfOrigin, tok, form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := fc.applied[0]; got.APIKey != "sk-typed-in-tab" || got.APIKeyFromEnv {
+		t.Errorf("applied = %+v, want typed key with APIKeyFromEnv=false", got)
+	}
+}
+
+// TestLLMSaveClearKeyWipes: the "Clear saved key" checkbox wipes the key even
+// when the field is blank, and marks it not-from-env so the empty value is
+// persisted (clearing the config copy).
+func TestLLMSaveClearKeyWipes(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{cur: llm.Settings{APIKey: "sk-old", APIKeyFromEnv: false}}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	form := validLLMForm()
+	form["clear_api_key"] = "1"
+	rec := llmPOST(t, srv, selfOrigin, tok, form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := fc.applied[0]; got.APIKey != "" || got.APIKeyFromEnv {
+		t.Errorf("applied = %+v, want wiped key (APIKey=\"\", APIKeyFromEnv=false)", got)
+	}
+}
