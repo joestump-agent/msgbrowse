@@ -360,7 +360,8 @@ func (s *Store) SplitContact(ctx context.Context, contactID int64, moved []Conta
 
 // ReconcileContacts is the idempotent decision-replay pass that runs after
 // every import and on demand (issue #11 / REQ-0015-007). It (1) re-applies
-// every stored merge decision whose two identifiers currently sit on different
+// every stored *manual* merge decision — plus stored auto merges only while
+// auto-merge is enabled — whose two identifiers currently sit on different
 // contacts, folding a re-ingested identity back onto its person, then (2), if
 // auto-merge is enabled, applies exact-normalized-identifier merges on the
 // trusted kinds — skipping any pair a manual split keeps apart and recording
@@ -389,8 +390,13 @@ func (s *Store) ReconcileContacts(ctx context.Context, resolver contacts.Resolve
 		}
 	}()
 
-	// Step 1: re-apply stored merge decisions.
-	mergeLinks, err := loadMergeLinks(ctx, tx)
+	// Step 1: re-apply stored merge decisions. Auto-origin merges are only
+	// re-folded while auto-merge is enabled: turning auto-merge OFF stops the
+	// engine from re-uniting a re-ingested identity that a prior auto pass had
+	// merged, so "auto-merge off" is honored across re-ingest (manual decisions
+	// always re-apply; an already-merged pair can still be separated with a
+	// manual split).
+	mergeLinks, err := loadMergeLinks(ctx, tx, rules.AutoMerge)
 	if err != nil {
 		return err
 	}
@@ -538,11 +544,16 @@ func loadContactNames(ctx context.Context, q querier) (map[int64]string, error) 
 	return out, rows.Err()
 }
 
-// loadMergeLinks returns every stored merge decision as an ordered pair of
-// idPairs.
-func loadMergeLinks(ctx context.Context, q querier) ([][2]idPair, error) {
-	rows, err := q.QueryContext(ctx,
-		`SELECT source_a, identifier_a, source_b, identifier_b FROM contact_links WHERE kind = 'merge'`)
+// loadMergeLinks returns stored merge decisions as ordered pairs of idPairs.
+// When includeAuto is false, origin='auto' rows are excluded so a disabled
+// auto-merge is not re-applied on the next reconcile (manual merges always
+// load).
+func loadMergeLinks(ctx context.Context, q querier, includeAuto bool) ([][2]idPair, error) {
+	query := `SELECT source_a, identifier_a, source_b, identifier_b FROM contact_links WHERE kind = 'merge'`
+	if !includeAuto {
+		query += ` AND origin <> 'auto'`
+	}
+	rows, err := q.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("load merge links: %w", err)
 	}

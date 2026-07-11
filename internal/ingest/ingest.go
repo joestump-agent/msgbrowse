@@ -140,8 +140,12 @@ func Run(ctx context.Context, st *store.Store, opts Options) (store.IngestRun, e
 	// idempotent and local-only; the nil resolver means "no address book",
 	// which is all reconcile needs — stored decisions re-apply without it, and
 	// address-book hints never auto-merge.
+	// Folding is best-effort: the import is already committed and hash-idempotent,
+	// and reconcile re-runs on the next import, so a reconcile failure is logged
+	// rather than failing an otherwise-successful (and needlessly retried) import.
 	if err := st.ReconcileContacts(ctx, nil); err != nil {
-		return run, err
+		log.Error("contact reconcile failed (import committed; will retry next run)", "error", err)
+		run.Errors++
 	}
 
 	log.Info("ingest complete",
