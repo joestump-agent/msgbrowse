@@ -346,6 +346,44 @@ func TestMergeCandidatesExcludesSplitPairs(t *testing.T) {
 	}
 }
 
+func TestMergedContactsListsMultiIdentifierOnly(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	// A lone single-identifier contact (never merged): excluded.
+	if _, err := st.UpsertConversation(ctx, source.Signal, "Solo"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A merged, multi-identifier person: included.
+	sig, _ := st.UpsertConversation(ctx, source.Signal, "MJ")
+	im, _ := st.UpsertConversation(ctx, source.IMessage, "+15551234567")
+	winner, err := st.MergeContacts(ctx, contactIDOf(t, st, sig), contactIDOf(t, st, im))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renameContact(t, st, winner, "Mary Jane")
+
+	got, err := st.MergedContacts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("merged contacts = %d, want 1 (single-identifier contact excluded): %+v", len(got), got)
+	}
+	mc := got[0]
+	if mc.ID != winner || mc.DisplayName != "Mary Jane" {
+		t.Fatalf("merged contact = %+v, want id %d name Mary Jane", mc, winner)
+	}
+	if len(mc.Identifiers) != 2 {
+		t.Fatalf("merged identifiers = %+v, want 2", mc.Identifiers)
+	}
+	// Ordered by source then value: imessage before signal.
+	if mc.Identifiers[0].Source != source.IMessage || mc.Identifiers[1].Source != source.Signal {
+		t.Errorf("identifier order = %+v, want imessage then signal", mc.Identifiers)
+	}
+}
+
 // putTestFact inserts a minimal fact for a contact.
 func putTestFact(t *testing.T, st *Store, contactID int64, fact string) {
 	t.Helper()

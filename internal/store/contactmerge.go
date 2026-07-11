@@ -196,6 +196,60 @@ func (s *Store) MergeCandidates(ctx context.Context, resolver contacts.Resolver)
 	return out, nil
 }
 
+// MergedContact is one contact carrying more than one identifier — the unit
+// the split UI (issue #12) works over. A single-identifier contact has nothing
+// to pull apart, so only multi-identifier contacts are listed: they are the
+// ones an auto rule or a manual merge has unified and that a mistaken merge can
+// be split back out of.
+type MergedContact struct {
+	ID          int64
+	DisplayName string
+	Identifiers []ContactIdentifier
+}
+
+// MergedContacts returns every contact that holds at least two identifiers,
+// each with its identifiers (ordered by source then value), ordered by display
+// name. These are exactly the contacts the split UI can act on — a contact with
+// one identifier cannot be split — so the settings surface lists them as the
+// review set for undoing an incorrect merge.
+func (s *Store) MergedContacts(ctx context.Context) ([]MergedContact, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT c.id, c.display_name, ci.source, ci.identifier
+  FROM contacts c
+  JOIN contact_identifiers ci ON ci.contact_id = c.id
+ ORDER BY c.display_name COLLATE NOCASE, c.id, ci.source, ci.identifier`)
+	if err != nil {
+		return nil, fmt.Errorf("merged contacts: %w", err)
+	}
+	defer rows.Close()
+	var out []MergedContact
+	var cur *MergedContact
+	for rows.Next() {
+		var id int64
+		var name string
+		var ci ContactIdentifier
+		if err := rows.Scan(&id, &name, &ci.Source, &ci.Identifier); err != nil {
+			return nil, err
+		}
+		if cur == nil || cur.ID != id {
+			out = append(out, MergedContact{ID: id, DisplayName: name})
+			cur = &out[len(out)-1]
+		}
+		cur.Identifiers = append(cur.Identifiers, ci)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Drop single-identifier contacts: nothing to split.
+	filtered := out[:0]
+	for _, mc := range out {
+		if len(mc.Identifiers) >= 2 {
+			filtered = append(filtered, mc)
+		}
+	}
+	return filtered, nil
+}
+
 // MergeContacts unions two contacts into one person (issue #11 / REQ-0015-005):
 // it records the full bipartite pairing of their identifiers as manual merge
 // decisions (so the merge survives re-ingest), repoints the loser's
