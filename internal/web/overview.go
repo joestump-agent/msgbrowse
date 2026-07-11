@@ -60,6 +60,12 @@ type embedStatusData struct {
 	LastFinished   string // local "2006-01-02 15:04"
 	LastEmbedded   int
 	LastDurationMS int64
+	// LastModel is the embed model the last completed run used. LatestEmbedRun
+	// is model-agnostic while coverage above is scoped to the configured model,
+	// so when a user switches llm.embed_model the two halves can describe
+	// different models; the template surfaces LastModel when it differs from
+	// Model so the disagreement is explained rather than silent.
+	LastModel string
 	// LastError is the abort reason when the last run failed ("" on success).
 	// Server-owned prose from the embed pipeline, escaped like everything else.
 	LastError string
@@ -69,8 +75,12 @@ type embedStatusData struct {
 // read as "indexing in progress". The heartbeat moves once per batch (a
 // single /embeddings request), so anything older than this means the embed
 // process died before its terminal write; report a crashed run rather than
-// spinning forever.
-const embedRunStaleAfter = 10 * time.Minute
+// spinning forever. The window is generous on purpose: a large batch (up to
+// 512) against a slow local embedding endpoint can take many minutes, and
+// misreading a live run as "Interrupted" invites the user to launch a second
+// concurrent `msgbrowse embed` against the same SQLite file — the more costly
+// error than briefly showing "Indexing…" for a run that just died.
+const embedRunStaleAfter = 30 * time.Minute
 
 // overviewTimeFormat is the freshness-stamp layout, matching the Settings
 // peers' PairedAt/LastSeen stamps.
@@ -115,6 +125,12 @@ func (s *Server) overviewProviders(ctx context.Context) ([]providerStat, error) 
 // the CURRENTLY configured embed model (live via the LLM tab's configurator
 // when wired, else the boot config) plus the latest recorded index run,
 // classified live / stalled / finished by its heartbeat.
+//
+// Accepted cost: EmbeddingCoverage is a full messages scan (COUNT + LEFT JOIN,
+// TRIM(body) predicate, no covering index) and it runs on every "/" render,
+// including boosted #main-content partials. Fine for modest archives; at the
+// millions-of-messages target this should move to a cached/periodic aggregate
+// rather than a per-request scan.
 func (s *Server) overviewEmbedding(ctx context.Context) (embedStatusData, error) {
 	model := strings.TrimSpace(s.currentLLM().EmbedModel)
 	d := embedStatusData{Model: model, Configured: model != ""}
@@ -148,6 +164,7 @@ func (s *Server) overviewEmbedding(ctx context.Context) (embedStatusData, error)
 		d.LastEmbedded = run.Embedded
 		d.LastDurationMS = run.DurationMS
 		d.LastError = run.Error
+		d.LastModel = run.Model
 	}
 	return d, nil
 }

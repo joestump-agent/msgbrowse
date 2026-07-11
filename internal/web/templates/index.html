@@ -94,6 +94,7 @@
           <div><div class="status-metric-label">Last index run</div>
             <div class="status-metric-value">
               {{- if .Embedding.HasLastRun}}{{.Embedding.LastFinished}} · {{num .Embedding.LastEmbedded}} embedded in {{num .Embedding.LastDurationMS}} ms
+                {{- if and .Embedding.LastModel (ne .Embedding.LastModel .Embedding.Model)}} <span class="opacity-60">(model {{.Embedding.LastModel}})</span>{{end}}
               {{- else if .Embedding.InProgress}}running now
               {{- else}}never{{end -}}
             </div></div>
@@ -103,13 +104,6 @@
           Last run aborted: <span class="font-mono">{{.Embedding.LastError}}</span></p>
         {{end}}
         {{end}}
-      </div>
-
-      {{/* MCP connection (issue #1): the same card Settings shows — endpoint
-           URL, client JSON, `claude mcp add` — shared via mcp_connect_card so
-           the two can never drift. Device pairing stays on Settings. */}}
-      <div class="mb-8">
-        {{template "mcp_connect_card" .}}
       </div>
 
       {{/* Quick-links: bordered cards with accent icons + dim subtitles. Boosted
@@ -144,6 +138,15 @@
         <p class="link-card-sub">Run <code class="font-mono">msgbrowse signal-import</code> against your archive, then refresh.</p>
       </div>
       {{end}}
+
+      {{/* MCP connection (issue #1): the same card Settings shows — endpoint
+           URL, client JSON, `claude mcp add` — shared via mcp_connect_card so
+           the two can never drift. Sits outside the HasArchive gate so a fresh
+           user can wire up their client before importing anything. Device
+           pairing stays on Settings. */}}
+      <div class="mt-8">
+        {{template "mcp_connect_card" .}}
+      </div>
     </div>
   </div>
     </main>
