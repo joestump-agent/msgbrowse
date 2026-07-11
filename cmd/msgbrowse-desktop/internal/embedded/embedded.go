@@ -191,6 +191,17 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Op
 	// `security` (no cgo) and is inert off macOS, so the core stays Linux-testable.
 	srv.SetDetector(newDesktopDetector())
 
+	// Wire the macOS Contacts provider (issue #10) behind the same injection
+	// seam as the detector: the merge engine (#11) and merge settings UI (#12)
+	// resolve archive identifiers against the address book. Compiled in only
+	// under the `macoscontacts` build tag (wireContacts is a no-op otherwise —
+	// the web layer keeps its contacts.Unavailable default); the provider itself
+	// self-degrades to no-address-book off macOS and until the OS grant is given.
+	wireContacts(srv, log)
+	if contactsCompiledIn {
+		log.Debug("macOS Contacts provider wired")
+	}
+
 	// Wire the Setup Enable flow (SPEC-0013) with the BUNDLED exporter toolchain,
 	// so a click on Enable resolves the exporter from Contents/Resources and never
 	// $PATH (making internal/toolchain.ResolveExporters live at the export site).
