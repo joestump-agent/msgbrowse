@@ -2,9 +2,11 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +130,74 @@ func TestRunRespectsBatchSize(t *testing.T) {
 	if sum.Batches != 3 || fc.calls != 3 {
 		t.Errorf("batches = %d, calls = %d, want 3/3", sum.Batches, fc.calls)
 	}
+}
+
+// TestRunRecordsEmbedRun (issue #1): every Run leaves a finished embed_runs
+// row behind — the durable log the web Overview reads for "last index run" —
+// with the run's totals, and a no-op re-run records its own (zero-work) row.
+func TestRunRecordsEmbedRun(t *testing.T) {
+	st := newStore(t)
+	seed(t, st)
+	ctx := context.Background()
+	opts := Options{EmbedModel: "test-embed", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	if _, err := Run(ctx, st, &fakeClient{}, opts); err != nil {
+		t.Fatal(err)
+	}
+	r, err := st.LatestEmbedRun(ctx)
+	if err != nil || r == nil {
+		t.Fatalf("LatestEmbedRun = %v, %v; want a recorded run", r, err)
+	}
+	if r.InFlight() {
+		t.Error("completed run still recorded as in flight")
+	}
+	if r.Model != "test-embed" || r.Embedded != 2 || r.Batches != 1 || r.Error != "" {
+		t.Errorf("recorded run = %+v, want model test-embed, 2 embedded in 1 batch, no error", r)
+	}
+
+	first := r.ID
+	if _, err := Run(ctx, st, &fakeClient{}, opts); err != nil {
+		t.Fatal(err)
+	}
+	r, err = st.LatestEmbedRun(ctx)
+	if err != nil || r == nil {
+		t.Fatalf("LatestEmbedRun after re-run = %v, %v", r, err)
+	}
+	if r.ID == first || r.Embedded != 0 || r.InFlight() {
+		t.Errorf("no-op re-run row = %+v, want a fresh finished row with 0 embedded", r)
+	}
+}
+
+// TestRunRecordsFailure: an aborted run's row is still finished (never left
+// dangling in-flight) and carries the abort reason.
+func TestRunRecordsFailure(t *testing.T) {
+	st := newStore(t)
+	seed(t, st)
+	ctx := context.Background()
+
+	_, err := Run(ctx, st, &failingClient{}, Options{
+		EmbedModel: "test-embed", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err == nil {
+		t.Fatal("expected the failing client to abort the run")
+	}
+	r, lerr := st.LatestEmbedRun(ctx)
+	if lerr != nil || r == nil {
+		t.Fatalf("LatestEmbedRun = %v, %v; want the failed run recorded", r, lerr)
+	}
+	if r.InFlight() {
+		t.Error("failed run left dangling in flight")
+	}
+	if r.Error == "" || !strings.Contains(r.Error, "boom") {
+		t.Errorf("recorded error = %q, want the abort reason", r.Error)
+	}
+}
+
+// failingClient errors on every Embed call.
+type failingClient struct{ fakeClient }
+
+func (f *failingClient) Embed(context.Context, []string) ([][]float32, error) {
+	return nil, errors.New("boom")
 }
 
 func TestRunNoModel(t *testing.T) {
