@@ -225,6 +225,11 @@ func (p *Provider) People(ctx context.Context) ([]contacts.Person, error) {
 // cross-shape widening is the merge engine's single documented job, not the
 // provider's. A zero identifier, an unavailable book, or no match all return an
 // empty result with a nil error.
+//
+// Resolve is a single-lookup affordance: each call re-enumerates the whole
+// address book via People() (no per-call cache). Callers that need to match
+// many identifiers should enumerate once with People() and index the result
+// themselves rather than calling Resolve in a loop.
 func (p *Provider) Resolve(ctx context.Context, id contacts.Identifier) ([]contacts.Person, error) {
 	if id.IsZero() {
 		return nil, nil
