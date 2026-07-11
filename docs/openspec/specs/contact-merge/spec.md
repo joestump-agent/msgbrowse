@@ -23,8 +23,8 @@ requires: [SPEC-0001]
 msgbrowse lets the user merge the same real person's identities across
 providers (Signal, iMessage, WhatsApp, …) into one canonical contact, split
 wrongly-merged ones, and control how candidates are detected — optionally
-assisted by the native macOS address book through a pluggable, injected
-`ContactResolver`. Merging MUST default to user-confirmed suggestions (never
+assisted by the native macOS address book through a pluggable, injected resolver
+(the `contacts.Resolver` interface, wired via `SetContactResolver`). Merging MUST default to user-confirmed suggestions (never
 silent heuristics, per [ADR-0003](../../../adr/0003-dual-source-archive.md)),
 manual decisions MUST survive re-ingest and source disable/re-enable, the
 address book MUST be optional on every platform (a no-op on Linux), and nothing
@@ -34,8 +34,9 @@ in this capability may perform network egress.
 
 ### REQ-0015-001: Pluggable address-book resolver with a safe absent state
 
-There MUST be a `ContactResolver` interface in a pure-Go package (no cgo)
-exposing: a tri-state availability (absent / needs-permission / available),
+There MUST be a resolver interface — the Go identifier is `contacts.Resolver`
+(package `contacts`), wired into the web layer via `SetContactResolver` — in a
+pure-Go package (no cgo) exposing: a tri-state availability (absent / needs-permission / available),
 enumeration of address-book people with their identifiers, and lookup of the
 people matching one normalized identifier. A default no-op implementation MUST
 report absent, return empty results, and never return an error, so that every
@@ -131,8 +132,10 @@ constraint on the pair, an origin (`manual` | `auto`), and no foreign key to
 invalid). A merge MUST record the full bipartite pairing of the two contacts'
 identifiers. An idempotent reconcile pass MUST re-apply decisions after every
 import and on demand, with precedence **manual split > manual merge > auto
-rules**, and a deterministic winner (prefer the contact whose `display_name`
-differs from all its identifiers, else the lower id). Disabling a source and
+rules**, and a deterministic winner chosen by an explicit ordered rule: (1) if
+exactly one contact has a user-meaningful `display_name` (differs from all its
+identifiers) that contact wins; (2) otherwise (both or neither user-meaningful)
+the lower `id` wins. Disabling a source and
 re-importing it MUST converge back to the merged state without user action.
 
 #### Scenario: Re-ingest cannot clobber a manual merge

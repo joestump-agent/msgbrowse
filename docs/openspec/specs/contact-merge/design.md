@@ -86,10 +86,11 @@ resurrect an unmerged contact for a re-imported identifier, and the reconcile
 pass folds it back immediately afterwards. Reconcile:
 
 1. applies every `merge` link whose two identifiers currently sit on
-   different contacts (union with the deterministic winner rule: prefer the
-   contact whose `display_name` differs from all of its identifiers — i.e. was
-   user-edited or address-book-derived rather than auto-created — else the
-   lower id);
+   different contacts (union with the deterministic winner rule, applied as an
+   explicit ordered rule: (1) if exactly one contact has a user-meaningful
+   `display_name` — differs from all of its identifiers, i.e. was user-edited
+   or address-book-derived rather than auto-created — that contact wins;
+   (2) otherwise, when both or neither is user-meaningful, the lower `id` wins);
 2. if rules enable auto-merge, merges exact normalized matches on trusted
    kinds, skipping any pair carrying a `split` link (precedence: manual split
    > manual merge > auto rules) and recording each applied merge as an
@@ -170,10 +171,10 @@ own decisions.
 
 ## Risks / trade-offs
 
-- **Deleted loser ids can dangle in external references** (bookmarked
-  `/contacts/{id}` URLs). Accepted: the winner rule keeps the
-  longest-lived/user-curated row, and contact URLs are not a stability
-  contract today.
+- **Deleted loser ids can dangle in external references** (e.g. a bookmark to
+  a hypothetical contact-by-id URL — no such route exists today). Accepted: the
+  winner rule keeps the longest-lived/user-curated row, and contact ids are not
+  a stability contract today.
 - **Bipartite link fan-out** is O(n·m) per merge. At address-book scale
   (hundreds of contacts, a handful of identifiers each) this is trivial, and
   it buys re-linking from any surviving pair.

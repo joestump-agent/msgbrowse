@@ -252,9 +252,11 @@ not invalid — it re-activates when that source is re-imported.
 
 An idempotent **reconcile pass** re-applies decisions after every import (and
 on demand from settings): for each `merge` link whose two identifiers both
-exist on different contacts, union them (winner selection is deterministic:
-prefer the contact whose `display_name` is user-meaningful — i.e. differs from
-all of its identifiers — else the lower id); then, if rules enable auto-merge,
+exist on different contacts, union them (winner selection is a deterministic
+ordered rule: (1) exactly one contact has a user-meaningful `display_name` —
+i.e. differs from all of its identifiers — that contact wins; (2) otherwise
+(both or neither user-meaningful) the lower `id` wins); then, if rules enable
+auto-merge,
 apply exact-match merges, skipping any pair with a `split` link (**precedence:
 manual split > manual merge > auto rules**), recording applied auto-merges as
 `origin='auto'` links so they too survive re-ingest. Reconcile runs entirely
@@ -285,8 +287,9 @@ contact mid-import, and reconcile immediately folds it back.
   (bounded — contacts number in the hundreds, not millions) and one more
   invariant ("reconcile converges, in one pass, regardless of decision order")
   to test carefully.
-- Merging deletes the loser's `contacts` row; anything referencing contact ids
-  outside the repointed set (bookmarks, URLs like `/contacts/{id}`) can dangle.
+- Merging deletes the loser's `contacts` row; if any future feature keys an
+  external reference to a contact id (a bookmark, or a hypothetical
+  contact-by-id URL — no such route exists today), that reference can dangle.
   The winner-selection rule keeps ids stable where possible but not always.
 - `contact_links` grows with the bipartite pairing of merged groups; a person
   with many identifiers across many sources produces O(n·m) rows. Acceptable at
