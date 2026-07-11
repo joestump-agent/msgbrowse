@@ -66,6 +66,8 @@ type Store interface {
 	SourceCounts(ctx context.Context) (map[string]store.SourceCount, error)
 	LastSyncTimes(ctx context.Context) (map[string]time.Time, error)
 	DeleteSourceData(ctx context.Context, src string) (int64, error)
+	LatestEmbedRun(ctx context.Context) (*store.EmbedRun, error)
+	EmbeddingCoverage(ctx context.Context, model string) (store.EmbeddingCoverage, error)
 }
 
 // Server holds the dependencies shared by all handlers.

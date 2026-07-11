@@ -22,37 +22,16 @@
     </nav>
 {{end}}
 
-{{/* settings_content is the boosted-swap unit (SPEC-0008 REQ-0008-006, the
-     *_content pattern): <title> keeps history entries titled; the define owns
-     <main id="main-content"> so partial responses carry no shell.
-
-     Connect/Settings (SPEC-0010): the MCP endpoint URL, JSON client config,
-     and `claude mcp add` line — each with an icon-only copy button — plus the
-     device-sync pairing section (SPEC-0014: this node's Syncthing device-ID
-     QR + manual code, the pair form, and the paired-device registry). Copy
-     buttons are wired by /static/copy.js via data-copy-target (no inline
-     handlers — script-src 'self'); confirmations are announced through the
-     shared #copy-announce aria-live region in the page shell (page_end, #14)
-     and shown visually by the button's copy→check icon swap. Every value is
-     also selectable text, so nothing depends on the
-     clipboard or the QR image alone. Logs and Status & backups render under
-     the same shell via the sub-nav above (issue #163). */}}
-{{define "settings_content"}}<title>{{.Title}}</title>
-    {{/* hx-history="false": the pair form carries a live per-session setup
-         token (the privileged-POST gate). Without this, a boosted navigation
-         away snapshots this page (token included) into htmx's localStorage
-         history cache, where it would outlive the session. The device-ID
-         payload itself is public (SPEC-0014 §Trust Model) — the token is why
-         the history opt-out stays. */}}
-    <main id="main-content" class="flex-1" tabindex="0" hx-history="false">
-  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
-    <h1 class="screen-h1">Settings</h1>
-    {{template "settings_subnav" "settings"}}
-    <p class="screen-sub">Connect an MCP client to this archive, or pair another device.</p>
-
-    {{/* Copy confirmations announce into the shared #copy-announce live region
-         in the page shell (page_end, #14) — no per-page region needed. */}}
-
+{{/* mcp_connect_card is the MCP connection card — endpoint URL, client JSON,
+     and the `claude mcp add` one-liner, each with an icon-only copy button
+     wired by /static/copy.js via data-copy-target (no inline handlers —
+     script-src 'self'; confirmations announce into the shared #copy-announce
+     region in the page shell). It is SHARED verbatim by Settings and the
+     Overview (issue #1), so the two surfaces can never drift; the dot needs
+     .MCPEndpointURL / .MCPConfigJSON / .MCPAddCommand (settingsData and
+     indexData both carry them). The element ids inside are unique per page —
+     the two surfaces never render together. */}}
+{{define "mcp_connect_card"}}
     <section class="status-card space-y-4" aria-labelledby="settings-mcp-heading">
       <h2 id="settings-mcp-heading" class="status-card-title">MCP server</h2>
       <p class="status-note">Point Claude Desktop or Claude Code at this archive over streamable HTTP.
@@ -95,6 +74,40 @@
         </div>
       </div>
     </section>
+{{end}}
+
+{{/* settings_content is the boosted-swap unit (SPEC-0008 REQ-0008-006, the
+     *_content pattern): <title> keeps history entries titled; the define owns
+     <main id="main-content"> so partial responses carry no shell.
+
+     Connect/Settings (SPEC-0010): the MCP endpoint URL, JSON client config,
+     and `claude mcp add` line — each with an icon-only copy button — plus the
+     device-sync pairing section (SPEC-0014: this node's Syncthing device-ID
+     QR + manual code, the pair form, and the paired-device registry). Copy
+     buttons are wired by /static/copy.js via data-copy-target (no inline
+     handlers — script-src 'self'); confirmations are announced through the
+     shared #copy-announce aria-live region in the page shell (page_end, #14)
+     and shown visually by the button's copy→check icon swap. Every value is
+     also selectable text, so nothing depends on the
+     clipboard or the QR image alone. Logs and Status & backups render under
+     the same shell via the sub-nav above (issue #163). */}}
+{{define "settings_content"}}<title>{{.Title}}</title>
+    {{/* hx-history="false": the pair form carries a live per-session setup
+         token (the privileged-POST gate). Without this, a boosted navigation
+         away snapshots this page (token included) into htmx's localStorage
+         history cache, where it would outlive the session. The device-ID
+         payload itself is public (SPEC-0014 §Trust Model) — the token is why
+         the history opt-out stays. */}}
+    <main id="main-content" class="flex-1" tabindex="0" hx-history="false">
+  <div class="px-6 lg:px-8 py-8 max-w-4xl space-y-5">
+    <h1 class="screen-h1">Settings</h1>
+    {{template "settings_subnav" "settings"}}
+    <p class="screen-sub">Connect an MCP client to this archive, or pair another device.</p>
+
+    {{/* Copy confirmations announce into the shared #copy-announce live region
+         in the page shell (page_end, #14) — no per-page region needed. */}}
+
+    {{template "mcp_connect_card" .}}
 
     {{/* Device sync (SPEC-0014 REQ "Pairing via Device ID and QR"): the QR and
          manual code carry this node's PUBLIC Syncthing device ID + folder
