@@ -118,12 +118,15 @@ func TestOpenURLWailsRejectedBytesAccepted(t *testing.T) {
 	}
 }
 
-// TestOpenURLAcceptsLoopbackMediaDownload pins the issue #4 desktop fix: the
-// bridge also carries the shell's file downloads. desktop.js routes same-origin
-// /media download anchors here (the webview has no download delegate), so a
-// loopback http URL — path-encoded exactly as mediaURL emits it, spaces and
-// all — must pass validation and reach the opener byte-for-byte, letting the
-// OS browser download it via the server's Content-Disposition: attachment.
+// TestOpenURLAcceptsLoopbackMediaDownload guards the SERVER half of the issue
+// #4 desktop fix: the bridge must accept the shell's file downloads. desktop.js
+// routes same-origin /media download anchors here (the webview has no download
+// delegate), so a loopback http URL — path-encoded exactly as mediaURL emits
+// it, spaces and all — must pass validation and reach the opener byte-for-byte,
+// letting the OS browser download it via Content-Disposition: attachment. The
+// client-side selection (only download-attribute anchors, cross-origin
+// untouched) lives in desktop.js and has no Go/JS harness — it is verified by
+// review, matching #179's server-only test posture.
 func TestOpenURLAcceptsLoopbackMediaDownload(t *testing.T) {
 	cases := []struct {
 		name, raw string

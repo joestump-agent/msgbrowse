@@ -137,6 +137,11 @@
       // resolves to a Content-Disposition: attachment response the webview
       // can't render or save, so it too must be handed to the OS browser,
       // which downloads it from the loopback server.
+      // Only the href is sent, not the download attribute, so in the webview
+      // the OS browser obeys the server's Content-Disposition alone — fine for
+      // the /media anchors, which media.go always serves as attachment. A
+      // future same-origin download anchor pointing at an inline-served type
+      // would open in the browser instead of saving.
       var external = url.origin !== window.location.origin;
       if (!external && !a.hasAttribute("download")) {
         return;
