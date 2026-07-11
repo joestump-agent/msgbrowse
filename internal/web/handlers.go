@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/joestump/msgbrowse/internal/devsync"
+	"github.com/joestump/msgbrowse/internal/mcp"
 	"github.com/joestump/msgbrowse/internal/store"
 )
 
@@ -149,6 +150,17 @@ type indexData struct {
 	ConversationCount int // stat-strip count; independent of the sidebar listing (REQ-0008-006)
 	NewestTS          string
 	HasArchive        bool
+	// Providers is the per-provider freshness breakdown (issue #1): counts +
+	// last-synced stamp per source, beside the global strip above.
+	Providers []providerStat
+	// Embedding is the semantic-search index status card (issue #1).
+	Embedding embedStatusData
+	// The MCP connection card (issue #1) — the same request-derived endpoint
+	// and copy blocks /settings shows, rendered by the shared mcp_connect_card
+	// define so the two surfaces can never drift.
+	MCPEndpointURL string
+	MCPConfigJSON  string
+	MCPAddCommand  string
 }
 
 type conversationData struct {
@@ -247,6 +259,21 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	// The Overview consolidation (issue #1): per-provider freshness and the
+	// semantic-index status ride every home render — full and boosted alike
+	// (they live inside #main-content); all are cheap aggregates, so the
+	// REQ-0008-006 sidebar-listing exemption above is untouched.
+	providers, err := s.overviewProviders(ctx)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	embedding, err := s.overviewEmbedding(ctx)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	endpoint := mcpEndpointURL(r)
 	// Home is the Messages surface: the header's Messages tab reads active.
 	base.NavTab = navTabMessages
 	s.render(w, r, "index", indexData{
@@ -254,6 +281,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		ConversationCount: convCount,
 		NewestTS:          newest,
 		HasArchive:        convCount > 0,
+		Providers:         providers,
+		Embedding:         embedding,
+		MCPEndpointURL:    endpoint,
+		MCPConfigJSON:     mcp.ClientConfigJSON(endpoint),
+		MCPAddCommand:     mcp.ClaudeMCPAddCommand(endpoint),
 	})
 }
 
