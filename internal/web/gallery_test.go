@@ -127,6 +127,88 @@ func TestGalleryLinksTab(t *testing.T) {
 	}
 }
 
+// seedLinkConversation writes one conversation carrying a single message with
+// the given link URL and returns nothing — callers query by the URL. Shared by
+// the #14 copy-control tests (transcript pill + Media→Links row).
+func seedLinkConversation(t *testing.T, st *store.Store, name, url string) {
+	t.Helper()
+	ctx := context.Background()
+	id, err := st.UpsertConversation(ctx, source.Signal, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := time.Parse(signal.TimestampLayout, "2022-06-01 10:00:00")
+	if _, err := st.ReplaceConversationMessages(ctx, id, source.Signal, []signal.Message{
+		{Conversation: name, Timestamp: parsed, TimestampRaw: "2022-06-01 10:00:00",
+			Sender: "Robin", Body: "see this", Links: []signal.Link{{URL: url}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGalleryLinkCopyButton asserts each Media→Links row carries an icon-only
+// copy control whose copy *source* is the FULL URL (issue #14): copy.js reads
+// data-copy-value, so the whole URL — not just the grouped domain — reaches the
+// clipboard. The control is labeled for the keyboard, and the row's own link
+// still points out so click-through-to-open is untouched.
+func TestGalleryLinkCopyButton(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	const url = "https://docs.example.org/guide/copy-me"
+	seedLinkConversation(t, st, "Linky", url)
+
+	rec := get(t, srv, "/gallery?tab=links")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// The copy button's source is the full URL (not the domain).
+	if !contains(body, `data-copy-value="`+url+`"`) {
+		t.Errorf("Media→Links row missing a copy button sourced from the full URL: %s", body)
+	}
+	// Keyboard-operable + labeled, and the inline icon-swap button markup.
+	if !contains(body, `aria-label="Copy link"`) || !contains(body, "copy-btn-inline") {
+		t.Error("link copy button missing its aria-label or inline copy-btn class")
+	}
+	// Click-through-to-open preserved: the URL still links out.
+	if !contains(body, `class="media-link-url" href="`+url+`"`) {
+		t.Error("Media→Links row dropped the click-through-to-open link")
+	}
+}
+
+// TestTranscriptLinkCopyButton asserts the transcript link pill (which shows
+// only the DOMAIN) gains an icon-only copy control that copies the FULL URL via
+// data-copy-value, without breaking the pill's link-out (issue #14).
+func TestTranscriptLinkCopyButton(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	const url = "https://blog.example.net/a/very/long/path?ref=chat"
+	seedLinkConversation(t, st, "Linky", url)
+	conv, err := st.GetConversation(context.Background(), "Linky")
+	if err != nil || conv == nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+
+	rec := get(t, srv, "/c/"+itoa(conv.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// The pill still links out (click-through-to-open) ...
+	if !contains(body, `class="link-pill" href="`+url+`"`) {
+		t.Errorf("transcript link pill dropped its link-out: %s", body)
+	}
+	// ... and the sibling copy button copies the full URL, labeled and inline.
+	if !contains(body, `data-copy-value="`+url+`"`) {
+		t.Error("transcript link tile missing a copy button sourced from the full URL")
+	}
+	if !contains(body, `aria-label="Copy link"`) || !contains(body, "copy-btn-inline") {
+		t.Error("transcript copy button missing its aria-label or inline copy-btn class")
+	}
+	// The shared aria-live announce region is present in the shell (page_end).
+	if !contains(body, `id="copy-announce"`) || !contains(body, `aria-live="polite"`) {
+		t.Error("transcript page missing the shared #copy-announce live region")
+	}
+}
+
 func TestGalleryTabPreservesFilter(t *testing.T) {
 	srv, st, _ := newTestServer(t)
 	conv, _ := st.GetConversation(context.Background(), "Harper")
