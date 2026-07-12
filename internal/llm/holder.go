@@ -148,26 +148,33 @@ const llmTestTimeout = 5 * time.Second
 // live client — the Settings → LLM tab's "Test connection" affordance, so a
 // user can verify a LiteLLM/Ollama endpoint before saving. It builds a
 // transient client from s (same builder ApplyLLM uses) and makes one cheap real
-// call to prove reachability + model validity: a single-string embed when an
-// embed model is set, else a 1-token chat when only the facts model is set.
+// call per configured model to prove reachability + model validity: a
+// single-string embed when an embed model is set AND a 1-token chat when a facts
+// model is set. Probing every configured model keeps the "the model is valid"
+// banner honest — a valid embed model no longer masks a typo'd facts model.
 // Returns nil on success, the underlying error otherwise (the web layer maps it
 // to a fixed-enum banner and never echoes it into the page).
 func (a *Applier) TestLLM(ctx context.Context, s Settings) error {
 	ctx, cancel := context.WithTimeout(ctx, llmTestTimeout)
 	defer cancel()
 	c := a.build(s)
+	if s.EmbedModel == "" && s.ChatModel == "" {
+		return fmt.Errorf("llm: no embed or facts model configured to test")
+	}
 	if s.EmbedModel != "" {
-		_, err := c.Embed(ctx, []string{"ping"})
-		return err
+		if _, err := c.Embed(ctx, []string{"ping"}); err != nil {
+			return err
+		}
 	}
 	if s.ChatModel != "" {
-		_, err := c.Chat(ctx, ChatRequest{
+		if _, err := c.Chat(ctx, ChatRequest{
 			Messages:  []Message{{Role: RoleUser, Content: "ping"}},
 			MaxTokens: 1,
-		})
-		return err
+		}); err != nil {
+			return err
+		}
 	}
-	return fmt.Errorf("llm: no embed or facts model configured to test")
+	return nil
 }
 
 // build constructs a fresh client from s, reused by ApplyLLM's live swap and

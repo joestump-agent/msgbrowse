@@ -114,13 +114,18 @@ func TestApplierPersistFailureLeavesHolderUntouched(t *testing.T) {
 	}
 }
 
-// TestApplierTestLLMEmbedProbe: with an embed model set, TestLLM makes a single
-// embeddings call to the ENTERED endpoint and returns nil on success — WITHOUT
-// swapping the live client (the holder keeps its marker).
-func TestApplierTestLLMEmbedProbe(t *testing.T) {
-	var hitPath string
+// TestApplierTestLLMProbesBothModels: with BOTH an embed and a facts model set,
+// TestLLM probes EACH — the embeddings endpoint and the chat endpoint — so a
+// valid embed model cannot mask a broken facts model. It returns nil on success
+// WITHOUT swapping the live client (the holder keeps its marker).
+func TestApplierTestLLMProbesBothModels(t *testing.T) {
+	hits := map[string]bool{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hitPath = r.URL.Path
+		hits[r.URL.Path] = true
+		if r.URL.Path == "/v1/chat/completions" {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"data":[{"index":0,"embedding":[0.1,0.2]}]}`)
 	}))
 	defer srv.Close()
@@ -133,8 +138,11 @@ func TestApplierTestLLMEmbedProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TestLLM = %v, want nil", err)
 	}
-	if hitPath != "/v1/embeddings" {
-		t.Errorf("probe hit %q, want /v1/embeddings", hitPath)
+	if !hits["/v1/embeddings"] {
+		t.Error("probe did not hit /v1/embeddings")
+	}
+	if !hits["/v1/chat/completions"] {
+		t.Error("probe did not hit /v1/chat/completions")
 	}
 	// The probe must not swap the live client.
 	if _, ok := h.current().(markerClient); !ok {
@@ -142,6 +150,27 @@ func TestApplierTestLLMEmbedProbe(t *testing.T) {
 	}
 	if h.Settings().BaseURL != "http://old.invalid/v1" {
 		t.Errorf("TestLLM changed the live settings: %+v", h.Settings())
+	}
+}
+
+// TestApplierTestLLMFactsModelError: a valid embed model must NOT mask a broken
+// facts model — TestLLM surfaces the chat probe's error even when the embed
+// probe succeeds.
+func TestApplierTestLLMFactsModelError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":[{"index":0,"embedding":[0.1,0.2]}]}`)
+	}))
+	defer srv.Close()
+
+	a := NewApplier(NewHolder(markerClient{marker: 1}, Settings{}), 0, nil)
+	if err := a.TestLLM(context.Background(), Settings{
+		BaseURL: srv.URL + "/v1", EmbedModel: "probe-embed", ChatModel: "probe-chat",
+	}); err == nil {
+		t.Error("TestLLM should surface a broken facts model even when the embed model is valid")
 	}
 }
 
