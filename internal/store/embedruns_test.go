@@ -146,6 +146,77 @@ func TestEmbeddingCoverage(t *testing.T) {
 	}
 }
 
+// TestResetEmbeddings pins the Status page's "Reset & rebuild" primitive
+// (issue #191): after ResetEmbeddings both the vectors AND the run log are
+// gone, so coverage reads 0 and LatestEmbedRun returns nil ("never").
+func TestResetEmbeddings(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	cid, err := st.UpsertConversation(ctx, source.Signal, "Harper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReplaceConversationMessages(ctx, cid, source.Signal, []signal.Message{
+		msg("Harper", "2022-03-01 09:00:00", "Harper", "the lease agreement", nil, nil),
+		msg("Harper", "2022-03-01 09:01:00", "Me", "lunch tomorrow", nil, nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Seed both tables: two vectors and a finished run.
+	targets, err := st.MessagesNeedingEmbedding(ctx, "test-embed", 10)
+	if err != nil || len(targets) != 2 {
+		t.Fatalf("targets = %v, %v; want 2", targets, err)
+	}
+	for _, tg := range targets {
+		if err := st.PutEmbedding(ctx, tg.Hash, "test-embed", []float32{1, 2}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runID, err := st.BeginEmbedRun(ctx, "test-embed", time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishEmbedRun(ctx, EmbedRun{ID: runID, FinishedAt: time.Now(), Embedded: 2, Batches: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	if cov, err := st.EmbeddingCoverage(ctx, "test-embed"); err != nil || cov.Embedded != 2 {
+		t.Fatalf("pre-reset coverage = %+v, %v; want 2 embedded", cov, err)
+	}
+
+	if err := st.ResetEmbeddings(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Vectors gone: coverage embedded drops to 0 (the embeddable denominator,
+	// the messages themselves, is untouched).
+	cov, err := st.EmbeddingCoverage(ctx, "test-embed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cov.Embedded != 0 || cov.Embeddable != 2 {
+		t.Errorf("post-reset coverage = %+v, want 0 of 2", cov)
+	}
+	// Run log gone: LatestEmbedRun reads "never".
+	run, err := st.LatestEmbedRun(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run != nil {
+		t.Errorf("post-reset LatestEmbedRun = %+v, want nil (never)", run)
+	}
+	// The messages survive (reset clears the index, never the archive).
+	if missing, err := st.CountMissingEmbeddings(ctx, "test-embed"); err != nil || missing != 2 {
+		t.Errorf("post-reset missing = %d, %v; want both messages pending again", missing, err)
+	}
+
+	// Idempotent: a second reset on an already-empty index is a no-op, not an
+	// error.
+	if err := st.ResetEmbeddings(ctx); err != nil {
+		t.Errorf("second ResetEmbeddings errored: %v", err)
+	}
+}
+
 // sysMsg builds a system message (not embeddable).
 func sysMsg(conv, ts, body string) signal.Message {
 	m := msg(conv, ts, "No-Sender", body, nil, nil)

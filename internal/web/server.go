@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joestump/msgbrowse/internal/archivepath"
@@ -164,6 +165,17 @@ type Server struct {
 	// llmBoot is the boot-time LLM config snapshot (file + defaults merged),
 	// the tab's display fallback when no configurator is wired.
 	llmBoot llm.Settings
+	// indexer runs the semantic-index embedding job behind the Status page's
+	// Build / Reset-&-rebuild controls (#191): serve and the desktop shell wire
+	// an internal/embed.Indexer over the shared store + llm.Holder via
+	// SetIndexer. nil (browser / no-op mode) renders the controls' "unavailable"
+	// state and makes the Build POST report itself so.
+	indexer Indexer
+	// indexMu guards indexing, the single-flight flag for the ONE global index
+	// job the web layer runs at a time. A second Build while a job is in flight
+	// coalesces to a no-op rather than starting a duplicate SQLite writer.
+	indexMu  sync.Mutex
+	indexing bool
 	// addressBook is the pluggable address-book provider behind contact
 	// merging (issue #9): the macOS desktop shell wires a Contacts-backed
 	// contacts.Resolver via SetContactResolver; nil (Linux, browser mode,
@@ -370,6 +382,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /c/{id}/messages", s.handleMessages)
 	mux.HandleFunc("GET /c/{id}/at/{mid}", s.handleConversationAt)
 	mux.HandleFunc("GET /status", s.handleStatus)
+	// Semantic-index controls (#191): privileged POSTs behind the same
+	// checkSetupPOST gate as the Setup POSTs — Build embeds the missing delta,
+	// Reset & rebuild clears the index and re-embeds from scratch. Both start a
+	// detached single-flight job and re-render Status with a fixed-enum banner.
+	mux.HandleFunc("POST /status/index", s.handleStatusIndex)
+	mux.HandleFunc("POST /status/index/reset", s.handleStatusIndexReset)
 	// The Backups tab (issue #2): the encrypted-DB-snapshot inventory, moved out
 	// of /status into its own Settings-shell section. A safe GET, no mutation.
 	mux.HandleFunc("GET /backups", s.handleBackups)

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/joestump/msgbrowse/internal/config"
+	"github.com/joestump/msgbrowse/internal/embed"
 	"github.com/joestump/msgbrowse/internal/ingest"
 	"github.com/joestump/msgbrowse/internal/onboardsvc"
 	"github.com/joestump/msgbrowse/internal/setup"
@@ -80,7 +81,11 @@ func newServeCommand() *cobra.Command {
 			// The Settings → LLM tab (#191): saves persist the three llm
 			// keys into the loaded config file and swap the process's live
 			// LLM holder, so a changed endpoint applies without a restart.
-			srv.SetLLMConfig(newLLMApplier(cfg, newLLMHolder(cfg)))
+			// The same holder backs the Status page's semantic-index controls,
+			// so a Build kicked off after an LLM save uses the new endpoint.
+			llmHolder := newLLMHolder(cfg)
+			srv.SetLLMConfig(newLLMApplier(cfg, llmHolder))
+			srv.SetIndexer(embed.NewIndexer(st, llmHolder, slog.Default()))
 
 			// Device sync (ADR-0021) is gated behind the `devicesync` build
 			// tag — it is NOT compiled into release binaries. wireDeviceSync is
