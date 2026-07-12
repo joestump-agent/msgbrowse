@@ -32,6 +32,14 @@ type Settings struct {
 	// needs none. Held in memory and persisted to the config file; it is never
 	// rendered back into the tab's HTML (the form shows only whether one is set).
 	APIKey string
+	// APIKeyFromEnv reports that the effective key came from the
+	// MSGBROWSE_LLM_API_KEY environment variable rather than the config file or
+	// the Settings tab. When true the key is used LIVE but is NEVER written to
+	// the config file on save — persisting an env-provided secret to disk would
+	// leak it out of the environment the operator deliberately scoped it to
+	// (ADR-0009). It flips to false the moment the user types a key into the tab
+	// (an explicit choice to store it, Option A).
+	APIKeyFromEnv bool
 }
 
 // Holder is a swappable Client: it implements the Client interface by

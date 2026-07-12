@@ -64,7 +64,8 @@
          button; the per-source Refresh icon stays for an on-demand import. */}}
     <p class="setup-footnote">
       {{- if .AnyActionable}}Detected sources can be enabled from here — enabling runs the bundled exporter and imports the result. Providers stays reachable from Settings at any time.
-      {{- else}}Enabled sources refresh automatically to import what's new; use a source's Refresh icon for an on-demand import. Providers stays reachable from Settings at any time.{{end}}
+      {{- else if .AnyEnabled}}Enabled sources refresh automatically to import what's new; use a source's Refresh icon for an on-demand import. Providers stays reachable from Settings at any time.
+      {{- else}}No message sources were detected on this Mac yet. Install Signal, iMessage, or WhatsApp — or sync from a paired device — and they'll appear here. Providers stays reachable from Settings at any time.{{end}}
     </p>
   </div>
     </main>

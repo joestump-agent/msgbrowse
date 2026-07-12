@@ -2,9 +2,12 @@
 
 // Device-sync wiring for `msgbrowse serve`, compiled ONLY under the `devicesync`
 // build tag (ADR-0021 / SPEC-0014). The feature is not release-ready, so the
-// default build excludes this file — and with it the internal/devsync and
-// internal/syncthing packages — entirely; serve_nodevicesync.go supplies the
-// no-op seam instead. Everything the pre-gate serve.go did inline lives here.
+// default build excludes THIS FILE (and the runtime that starts a Syncthing
+// engine); serve_nodevicesync.go supplies the no-op seam instead. Note the tag
+// gates the runtime, not the dep graph: internal/web imports internal/devsync
+// unconditionally, so both internal/devsync and internal/syncthing stay in the
+// binary either way (see serve_nodevicesync.go's boundary note). Everything the
+// pre-gate serve.go did inline lives here.
 package cli
 
 import (
