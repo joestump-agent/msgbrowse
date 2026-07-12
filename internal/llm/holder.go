@@ -8,6 +8,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -135,12 +136,55 @@ func (a *Applier) ApplyLLM(s Settings) error {
 			return err
 		}
 	}
-	a.holder.Swap(New(Options{
+	a.holder.Swap(a.build(s), s)
+	return nil
+}
+
+// llmTestTimeout caps a TestLLM probe so a wrong or dead endpoint fails fast
+// rather than hanging the Settings tab for the Applier's full request timeout.
+const llmTestTimeout = 5 * time.Second
+
+// TestLLM probes the endpoint described by s WITHOUT persisting or swapping the
+// live client — the Settings → LLM tab's "Test connection" affordance, so a
+// user can verify a LiteLLM/Ollama endpoint before saving. It builds a
+// transient client from s (same builder ApplyLLM uses) and makes one cheap real
+// call per configured model to prove reachability + model validity: a
+// single-string embed when an embed model is set AND a 1-token chat when a facts
+// model is set. Probing every configured model keeps the "the model is valid"
+// banner honest — a valid embed model no longer masks a typo'd facts model.
+// Returns nil on success, the underlying error otherwise (the web layer maps it
+// to a fixed-enum banner and never echoes it into the page).
+func (a *Applier) TestLLM(ctx context.Context, s Settings) error {
+	ctx, cancel := context.WithTimeout(ctx, llmTestTimeout)
+	defer cancel()
+	c := a.build(s)
+	if s.EmbedModel == "" && s.ChatModel == "" {
+		return fmt.Errorf("llm: no embed or facts model configured to test")
+	}
+	if s.EmbedModel != "" {
+		if _, err := c.Embed(ctx, []string{"ping"}); err != nil {
+			return err
+		}
+	}
+	if s.ChatModel != "" {
+		if _, err := c.Chat(ctx, ChatRequest{
+			Messages:  []Message{{Role: RoleUser, Content: "ping"}},
+			MaxTokens: 1,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// build constructs a fresh client from s, reused by ApplyLLM's live swap and
+// TestLLM's transient probe so both go through identical Options.
+func (a *Applier) build(s Settings) *OpenAIClient {
+	return New(Options{
 		BaseURL:    s.BaseURL,
 		APIKey:     s.APIKey,
 		ChatModel:  s.ChatModel,
 		EmbedModel: s.EmbedModel,
 		Timeout:    a.timeout,
-	}), s)
-	return nil
+	})
 }

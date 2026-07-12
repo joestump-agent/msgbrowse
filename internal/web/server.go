@@ -396,6 +396,7 @@ func (s *Server) routes() http.Handler {
 	// as every other privileged POST.
 	mux.HandleFunc("GET /settings/llm", s.handleSettingsLLM)
 	mux.HandleFunc("POST /settings/llm", s.handleSettingsLLMSave)
+	mux.HandleFunc("POST /settings/llm/test", s.handleSettingsLLMTest)
 	// The Settings → Contacts tab (#12): the merge-rules settings, de-dup
 	// candidate review, and the manual merge/split overrides. A safe GET render
 	// plus three privileged POSTs (save rules / merge / split), each gated by

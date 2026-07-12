@@ -63,8 +63,13 @@
 <header class="app-toolbar z-30 px-3 md:px-4">
   <div class="toolbar-cluster toolbar-cluster-left">
     <label for="nav-drawer" class="toolbar-icon-btn md:hidden" role="button" tabindex="0" aria-expanded="false" aria-label="Toggle sidebar">{{template "icon-menu" .}}</label>
+    {{/* The link always goes home (#190); the home glyph makes that affordance
+         visible next to the contextual title. The glyph is decorative
+         (aria-hidden in icons.html) so aria-label="msgbrowse home" stays the
+         sole accessible name, and the label lives in its own span so the
+         ellipsis truncation applies to the text, not the icon. */}}
     <a href="/" class="toolbar-title" aria-label="msgbrowse home"
-       hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{if .NavTitle}}{{.NavTitle}}{{else}}msgbrowse{{end}}</a>
+       hx-boost="true" hx-target="#main-content" hx-select="#main-content" hx-swap="outerHTML" hx-push-url="true">{{template "icon-home" .}}<span class="toolbar-title-label">{{if .NavTitle}}{{.NavTitle}}{{else}}msgbrowse{{end}}</span></a>
   </div>
   {{/* Centered tabs: the IN-FLOW middle column of the .app-toolbar grid
        (input.css) — the grid's 1fr side tracks make overlap with the side

@@ -43,6 +43,23 @@
       <p class="link-card-sub">The settings could not be written to the config file; the running
         configuration is unchanged. See Logs for details and try again.</p>
     </div>
+    {{- else if eq .TestResult "ok"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Connection succeeded.</p>
+      <p class="link-card-sub">The endpoint responded and the model is valid. These values were only
+        tested — click Save and apply to keep them.</p>
+    </div>
+    {{- else if eq .TestResult "unreachable"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Connection failed.</p>
+      <p class="link-card-sub">The endpoint could not be reached, or it rejected the model. Check the base
+        URL, model names, and API key, then try again. See Logs for details.</p>
+    </div>
+    {{- else if eq .TestResult "unavailable"}}
+    <div class="notice-card" role="status">
+      <p class="link-card-title">Testing is not available here.</p>
+      <p class="link-card-sub">This server was started without a live LLM client to probe with.</p>
+    </div>
     {{- else if .HasErrors}}
     <div class="notice-card" role="status">
       <p class="link-card-title">Nothing was saved.</p>
@@ -124,7 +141,18 @@
             variable, if set, still overrides it at startup.</p>
         </div>
 
-        <button type="submit" class="setup-btn">Save and apply</button>
+        {{/* Two submit buttons share the form. "Save and apply" posts to the
+             form's action (/settings/llm). "Test connection" probes the
+             CURRENTLY-ENTERED values without saving: hx-post retargets the
+             boosted submit to /settings/llm/test (inheriting the form's
+             hx-target/hx-select/hx-swap), and formaction gives the identical
+             route to the no-JS plain-POST fallback. No inline JS — CSP-safe. */}}
+        <div class="flex flex-wrap gap-3">
+          <button type="submit" class="setup-btn">Save and apply</button>
+          <button type="submit" class="setup-btn setup-btn-ghost"
+                  formaction="/settings/llm/test"
+                  hx-post="/settings/llm/test">Test connection</button>
+        </div>
       </form>
 
       <p class="status-note">msgbrowse's only network egress goes to this URL; the default points at a
