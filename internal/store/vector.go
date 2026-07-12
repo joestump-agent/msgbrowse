@@ -116,6 +116,32 @@ DELETE FROM embeddings
 	return res.RowsAffected()
 }
 
+// ResetEmbeddings clears the semantic-search index: it DELETEs every stored
+// vector AND every embed_runs row in one transaction, so afterwards
+// EmbeddingCoverage reports 0-embedded and LatestEmbedRun returns nil ("never
+// indexed"). It backs the Status page's "Reset & rebuild" control (issue #191):
+// a from-scratch rebuild whose UI immediately reads as un-indexed rather than
+// showing a stale "last run" from the wiped-out vectors. Both tables are
+// cleared together — a run log describing embeddings that no longer exist would
+// be misleading — so the two DELETEs share one atomic unit.
+func (s *Store) ResetEmbeddings(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("reset embeddings: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM embeddings`); err != nil {
+		return fmt.Errorf("reset embeddings: delete vectors: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM embed_runs`); err != nil {
+		return fmt.Errorf("reset embeddings: delete run log: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("reset embeddings: commit: %w", err)
+	}
+	return nil
+}
+
 // SemanticSearch returns the top-K messages most cosine-similar to query, after
 // applying the metadata filters. It is a brute-force scan: candidate vectors
 // (filtered) are loaded and scored in Go. For a personal archive this is fast
