@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/joestump/msgbrowse/internal/config"
+	"github.com/joestump/msgbrowse/internal/embed"
 	"github.com/joestump/msgbrowse/internal/llm"
 	"github.com/joestump/msgbrowse/internal/mcp"
 	"github.com/joestump/msgbrowse/internal/onboard"
@@ -226,6 +227,10 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger, opts ...Op
 	// tools return errors — identical degradation.
 	holder := newLLMHolder(cfg)
 	srv.SetLLMConfig(newLLMApplier(cfg, holder))
+	// The Status page's semantic-index controls (#191) run over this same live
+	// holder + store, so a Build kicked off after an LLM save uses the new
+	// endpoint with no relaunch.
+	srv.SetIndexer(embed.NewIndexer(st, holder, log))
 	mcpSrv := mcp.NewServer(st, holder, mcp.Options{
 		EmbedModelFunc: holder.EmbedModel,
 		Logger:         log,
