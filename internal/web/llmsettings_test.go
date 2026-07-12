@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,11 @@ type fakeLLMConfigurator struct {
 	cur      llm.Settings
 	applied  []llm.Settings
 	applyErr error
+	// tested records every TestLLM probe so the tests can assert a rejected
+	// POST probed NOTHING (the checkSetupPOST contract); testErr is the error
+	// the probe returns (nil = reachable).
+	tested  []llm.Settings
+	testErr error
 }
 
 func (f *fakeLLMConfigurator) CurrentLLM() llm.Settings { return f.cur }
@@ -32,10 +38,24 @@ func (f *fakeLLMConfigurator) ApplyLLM(s llm.Settings) error {
 	f.cur = s
 	return nil
 }
+func (f *fakeLLMConfigurator) TestLLM(_ context.Context, s llm.Settings) error {
+	f.tested = append(f.tested, s)
+	return f.testErr
+}
 
 // llmPOST builds a POST /settings/llm with the given origin, token, and form
 // values (empty entries omitted), mirroring enablePOST.
 func llmPOST(t *testing.T, srv *Server, origin, token string, fields map[string]string) *httptest.ResponseRecorder {
+	return llmPOSTTo(t, srv, "/settings/llm", origin, token, fields)
+}
+
+// llmTestPOST builds a POST /settings/llm/test — the "Test connection" probe.
+func llmTestPOST(t *testing.T, srv *Server, origin, token string, fields map[string]string) *httptest.ResponseRecorder {
+	return llmPOSTTo(t, srv, "/settings/llm/test", origin, token, fields)
+}
+
+// llmPOSTTo posts the given form to path with the given origin/token.
+func llmPOSTTo(t *testing.T, srv *Server, path, origin, token string, fields map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	form := url.Values{}
 	for k, v := range fields {
@@ -44,7 +64,7 @@ func llmPOST(t *testing.T, srv *Server, origin, token string, fields map[string]
 	if token != "" {
 		form.Set(setupTokenField, token)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/settings/llm", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if origin != "" {
 		req.Header.Set("Origin", origin)
@@ -392,5 +412,140 @@ func TestLLMSaveApplyErrorReported(t *testing.T) {
 	}
 	if contains(body, "LLM settings saved.") {
 		t.Error("rendered success despite an apply error")
+	}
+}
+
+// TestLLMTabHasTestButton: the tab renders a "Test connection" submit that
+// targets /settings/llm/test (both the htmx hx-post and the no-JS formaction).
+func TestLLMTabHasTestButton(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.SetLLMConfig(&fakeLLMConfigurator{})
+
+	body := get(t, srv, "/settings/llm").Body.String()
+	if !contains(body, "Test connection") {
+		t.Error("LLM tab missing the Test connection button")
+	}
+	if !contains(body, `hx-post="/settings/llm/test"`) {
+		t.Error("Test connection button missing its hx-post route")
+	}
+	if !contains(body, `formaction="/settings/llm/test"`) {
+		t.Error("Test connection button missing its no-JS formaction route")
+	}
+}
+
+// TestLLMTestConnectionOK: a probe that returns nil renders the success banner,
+// records the ENTERED values, and applies/persists NOTHING.
+func TestLLMTestConnectionOK(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	rec := llmTestPOST(t, srv, selfOrigin, tok, validLLMForm())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !contains(rec.Body.String(), "Connection succeeded.") {
+		t.Error("missing the test-ok banner")
+	}
+	if len(fc.applied) != 0 {
+		t.Fatalf("test probe applied %d settings, want 0", len(fc.applied))
+	}
+	if len(fc.tested) != 1 {
+		t.Fatalf("test probed %d times, want 1", len(fc.tested))
+	}
+	if got := fc.tested[0]; got.BaseURL != "http://127.0.0.1:11434/v1" || got.EmbedModel != "nomic-embed-text" || got.ChatModel != "llama3" {
+		t.Errorf("probed settings = %+v", got)
+	}
+}
+
+// TestLLMTestConnectionUnreachable: a probe that errors renders the failure
+// banner and NEVER echoes the raw error (which can carry the endpoint URL).
+func TestLLMTestConnectionUnreachable(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{testErr: errors.New("dial tcp 10.0.0.9:4000: connection refused")}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	rec := llmTestPOST(t, srv, selfOrigin, tok, validLLMForm())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !contains(body, "Connection failed.") {
+		t.Error("missing the test-unreachable banner")
+	}
+	if contains(body, "connection refused") || contains(body, "10.0.0.9") {
+		t.Error("the raw probe error must never be rendered into the page")
+	}
+	if contains(body, "Connection succeeded.") {
+		t.Error("rendered success despite a probe error")
+	}
+}
+
+// TestLLMTestUnavailableWithoutConfigurator: no configurator wired → the
+// gate-passing probe reports itself unavailable and probes nothing.
+func TestLLMTestUnavailableWithoutConfigurator(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	tok := mintToken(t, srv)
+	rec := llmTestPOST(t, srv, selfOrigin, tok, validLLMForm())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !contains(rec.Body.String(), "Testing is not available here.") {
+		t.Error("missing the test-unavailable banner")
+	}
+}
+
+// TestLLMTestValidationRejected: an invalid form re-renders with the field
+// error and probes NOTHING (validation runs before the probe).
+func TestLLMTestValidationRejected(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	rec := llmTestPOST(t, srv, selfOrigin, tok, map[string]string{"base_url": "ftp://nope/v1"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if len(fc.tested) != 0 {
+		t.Fatalf("invalid input probed %d times, want 0", len(fc.tested))
+	}
+	if !contains(rec.Body.String(), "must start with http:// or https://") {
+		t.Error("missing the base-URL field error")
+	}
+}
+
+// TestLLMTestCrossOriginRejected: a cross-origin probe — even with a valid
+// token — is rejected 403 and probes nothing (the checkSetupPOST gate).
+func TestLLMTestCrossOriginRejected(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{}
+	srv.SetLLMConfig(fc)
+
+	tok := mintToken(t, srv)
+	rec := llmTestPOST(t, srv, "http://evil.example", tok, validLLMForm())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin probe status = %d, want 403", rec.Code)
+	}
+	if len(fc.tested) != 0 {
+		t.Fatalf("cross-origin probe ran %d times, want 0", len(fc.tested))
+	}
+}
+
+// TestLLMTestMissingTokenRejected: same-origin but tokenless → 403, nothing
+// probed.
+func TestLLMTestMissingTokenRejected(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	fc := &fakeLLMConfigurator{}
+	srv.SetLLMConfig(fc)
+
+	rec := llmTestPOST(t, srv, selfOrigin, "", validLLMForm())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing-token probe status = %d, want 403", rec.Code)
+	}
+	if len(fc.tested) != 0 {
+		t.Fatalf("missing-token probe ran %d times, want 0", len(fc.tested))
 	}
 }

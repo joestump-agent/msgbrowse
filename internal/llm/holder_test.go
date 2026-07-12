@@ -3,6 +3,9 @@ package llm
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -108,5 +111,76 @@ func TestApplierPersistFailureLeavesHolderUntouched(t *testing.T) {
 	}
 	if _, ok := h.current().(markerClient); !ok {
 		t.Error("client swapped despite persist failure")
+	}
+}
+
+// TestApplierTestLLMEmbedProbe: with an embed model set, TestLLM makes a single
+// embeddings call to the ENTERED endpoint and returns nil on success — WITHOUT
+// swapping the live client (the holder keeps its marker).
+func TestApplierTestLLMEmbedProbe(t *testing.T) {
+	var hitPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitPath = r.URL.Path
+		_, _ = io.WriteString(w, `{"data":[{"index":0,"embedding":[0.1,0.2]}]}`)
+	}))
+	defer srv.Close()
+
+	h := NewHolder(markerClient{marker: 7}, Settings{BaseURL: "http://old.invalid/v1"})
+	a := NewApplier(h, 0, nil)
+	err := a.TestLLM(context.Background(), Settings{
+		BaseURL: srv.URL + "/v1", EmbedModel: "probe-embed", ChatModel: "probe-chat",
+	})
+	if err != nil {
+		t.Fatalf("TestLLM = %v, want nil", err)
+	}
+	if hitPath != "/v1/embeddings" {
+		t.Errorf("probe hit %q, want /v1/embeddings", hitPath)
+	}
+	// The probe must not swap the live client.
+	if _, ok := h.current().(markerClient); !ok {
+		t.Error("TestLLM swapped the live client")
+	}
+	if h.Settings().BaseURL != "http://old.invalid/v1" {
+		t.Errorf("TestLLM changed the live settings: %+v", h.Settings())
+	}
+}
+
+// TestApplierTestLLMChatProbe: with only a facts (chat) model set, TestLLM
+// probes /chat/completions instead of /embeddings.
+func TestApplierTestLLMChatProbe(t *testing.T) {
+	var hitPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitPath = r.URL.Path
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+
+	a := NewApplier(NewHolder(markerClient{marker: 1}, Settings{}), 0, nil)
+	if err := a.TestLLM(context.Background(), Settings{BaseURL: srv.URL + "/v1", ChatModel: "probe-chat"}); err != nil {
+		t.Fatalf("TestLLM = %v, want nil", err)
+	}
+	if hitPath != "/v1/chat/completions" {
+		t.Errorf("probe hit %q, want /v1/chat/completions", hitPath)
+	}
+}
+
+// TestApplierTestLLMSurfacesError: a 5xx from the endpoint surfaces as an error.
+func TestApplierTestLLMSurfacesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := NewApplier(NewHolder(markerClient{marker: 1}, Settings{}), 0, nil)
+	if err := a.TestLLM(context.Background(), Settings{BaseURL: srv.URL + "/v1", EmbedModel: "probe-embed"}); err == nil {
+		t.Error("TestLLM should surface a 5xx as an error")
+	}
+}
+
+// TestApplierTestLLMNoModel: with neither model set there is nothing to probe.
+func TestApplierTestLLMNoModel(t *testing.T) {
+	a := NewApplier(NewHolder(markerClient{marker: 1}, Settings{}), 0, nil)
+	if err := a.TestLLM(context.Background(), Settings{BaseURL: "http://x.invalid/v1"}); err == nil {
+		t.Error("TestLLM with no models should error")
 	}
 }

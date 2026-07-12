@@ -18,6 +18,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -46,6 +47,11 @@ type LLMConfigurator interface {
 	// ApplyLLM persists s to the config file and swaps the live client.
 	// Nothing is swapped when persistence fails.
 	ApplyLLM(s llm.Settings) error
+	// TestLLM probes the endpoint described by s with a cheap real call,
+	// WITHOUT persisting or swapping the live client — the "Test connection"
+	// affordance so a user can verify an endpoint before saving. Returns nil
+	// on success, an error otherwise.
+	TestLLM(ctx context.Context, s llm.Settings) error
 }
 
 // SetLLMConfig wires the live LLM settings source. Call it after NewServer
@@ -72,6 +78,11 @@ type llmSettingsData struct {
 	// SaveResult is the post-save banner state: "" (no save attempted), "ok",
 	// "unavailable" (no configurator wired), or "error" (persist/swap failed).
 	SaveResult string
+	// TestResult is the post-probe banner state for "Test connection": ""
+	// (no probe attempted), "ok" (endpoint reachable + model valid),
+	// "unreachable" (probe failed — no raw error is echoed), or "unavailable"
+	// (no configurator wired).
+	TestResult string
 	// Per-field validation errors: "" (valid), "required", "scheme",
 	// "invalid", or "toolong".
 	ErrBaseURL    string
@@ -175,6 +186,68 @@ func (s *Server) handleSettingsLLMSave(w http.ResponseWriter, r *http.Request) {
 		HasAPIKey:  cur.APIKey != "",
 		SaveResult: "ok",
 	})
+}
+
+// handleSettingsLLMTest is POST /settings/llm/test — the "Test connection"
+// probe. Gated exactly like the save (checkSetupPOST: same-origin +
+// per-session token + body cap, 403 before any work), it reads the SAME
+// currently-entered (unsaved) form values, validates them, then probes the
+// endpoint WITHOUT persisting or swapping the live client. The result is a
+// fixed-enum banner ("ok" / "unreachable" / "unavailable"); the raw probe
+// error is logged server-side but never echoed into the page (it can carry the
+// endpoint URL). The form and effective/entered values re-render unchanged so
+// the user can adjust and retry.
+func (s *Server) handleSettingsLLMTest(w http.ResponseWriter, r *http.Request) {
+	if !s.checkSetupPOST(w, r) {
+		return // 403 already written; nothing was validated or probed
+	}
+
+	// Same secret-field resolution as save: a blank api_key means "use the
+	// current key", so the probe verifies the endpoint the user would save.
+	apiKey := strings.TrimSpace(r.PostFormValue("api_key"))
+	if apiKey == "" {
+		apiKey = s.currentLLM().APIKey
+	}
+
+	data := llmSettingsData{
+		BaseURL:    strings.TrimSpace(r.PostFormValue("base_url")),
+		EmbedModel: strings.TrimSpace(r.PostFormValue("embed_model")),
+		FactsModel: strings.TrimSpace(r.PostFormValue("facts_model")),
+		HasAPIKey:  apiKey != "",
+	}
+	data.ErrBaseURL = validateLLMBaseURL(data.BaseURL)
+	data.ErrEmbedModel = validateLLMModel(data.EmbedModel)
+	data.ErrFactsModel = validateLLMModel(data.FactsModel)
+	data.ErrAPIKey = validateLLMAPIKey(apiKey)
+	if data.HasErrors() {
+		s.renderLLMSettings(w, r, data)
+		return
+	}
+
+	if s.llmConfig == nil {
+		data.TestResult = "unavailable"
+		s.renderLLMSettings(w, r, data)
+		return
+	}
+	if err := s.llmConfig.TestLLM(r.Context(), llm.Settings{
+		BaseURL:    data.BaseURL,
+		EmbedModel: data.EmbedModel,
+		ChatModel:  data.FactsModel,
+		APIKey:     apiKey,
+	}); err != nil {
+		// The raw error can name the endpoint URL, so it is logged (endpoint
+		// names are configuration, never message content) but NEVER rendered.
+		s.log.Warn("LLM test connection failed",
+			"base_url", data.BaseURL, "embed_model", data.EmbedModel, "chat_model", data.FactsModel,
+			"error", err)
+		data.TestResult = "unreachable"
+		s.renderLLMSettings(w, r, data)
+		return
+	}
+	s.log.Info("LLM test connection succeeded",
+		"base_url", data.BaseURL, "embed_model", data.EmbedModel, "chat_model", data.FactsModel)
+	data.TestResult = "ok"
+	s.renderLLMSettings(w, r, data)
 }
 
 // renderLLMSettings finishes any LLM-tab response: shell (full or boosted
