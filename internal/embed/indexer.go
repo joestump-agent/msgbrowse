@@ -2,6 +2,7 @@ package embed
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -46,13 +47,23 @@ func (ix *Indexer) EmbedModel() string { return strings.TrimSpace(ix.holder.Embe
 // call. Prune is on: a rebuild should not carry vectors for messages a
 // re-ingest removed.
 func (ix *Indexer) RunEmbed(ctx context.Context, reset bool) error {
+	// Re-read the model on the detached goroutine and bail BEFORE touching the
+	// store. startReindex checked EmbedModel() on the request goroutine, but a
+	// concurrent Settings → LLM save can clear it in the window before we run.
+	// Without this guard a reset would ResetEmbeddings (wiping vectors AND
+	// embed_runs) and only then have embed.Run no-op on "model not configured",
+	// leaving an empty index with no run row ("0 of N / never").
+	model := strings.TrimSpace(ix.holder.EmbedModel())
+	if model == "" {
+		return fmt.Errorf("embed: model not configured (set llm.embed_model)")
+	}
 	if reset {
 		if err := ix.store.ResetEmbeddings(ctx); err != nil {
 			return err
 		}
 	}
 	_, err := Run(ctx, ix.store, ix.holder, Options{
-		EmbedModel: ix.holder.EmbedModel(),
+		EmbedModel: model,
 		Prune:      true,
 		Logger:     ix.log,
 	})
