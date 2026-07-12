@@ -104,6 +104,9 @@
           Last run aborted: <span class="font-mono">{{.Embedding.LastError}}</span></p>
         {{end}}
         {{end}}
+        {{/* The controls live on the Status page (#191): the Overview points at
+             them rather than duplicating the Build / Reset buttons here. */}}
+        <p class="status-note mt-4"><a href="/status" class="link link-hover">Manage index →</a></p>
       </div>
 
       {{/* Quick-links: bordered cards with accent icons + dim subtitles. Boosted
