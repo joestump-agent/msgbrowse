@@ -27,8 +27,14 @@ func TestToolbarContextualTitle(t *testing.T) {
 	if !contains(home, `class="toolbar-title" aria-label="msgbrowse home"`) {
 		t.Error("home toolbar title should be the msgbrowse-home link")
 	}
-	if !contains(home, ">msgbrowse</a>") {
+	// The label lives in its own span (the home glyph precedes it, so only the
+	// text ellipsis-truncates); it still reads "msgbrowse" on home.
+	if !contains(home, `<span class="toolbar-title-label">msgbrowse</span></a>`) {
 		t.Error("home toolbar title should read 'msgbrowse'")
+	}
+	// The decorative home glyph is present inside the home link.
+	if !contains(home, `aria-label="msgbrowse home"`) || !contains(home, "toolbar-title-label") {
+		t.Error("home toolbar title should carry the home glyph beside the label")
 	}
 	// Option A removed the global counts from the toolbar entirely.
 	if contains(home, "navbar-counts") || contains(home, " conversations · ") {
@@ -41,7 +47,7 @@ func TestToolbarContextualTitle(t *testing.T) {
 		t.Fatalf("get conversation: %v", err)
 	}
 	convPage := get(t, srv, "/c/"+itoa(conv.ID)).Body.String()
-	if !contains(convPage, ">"+humanName(conv.Name)+"</a>") {
+	if !contains(convPage, `<span class="toolbar-title-label">`+humanName(conv.Name)+"</span></a>") {
 		t.Errorf("transcript toolbar title should read the conversation name %q", humanName(conv.Name))
 	}
 	// It is still the home link (clickable back to home), not a plain heading.
